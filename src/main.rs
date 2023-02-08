@@ -1,5 +1,7 @@
+mod database;
+use database::Database;
+
 use rand::Rng;
-use sqlx::{QueryBuilder, Sqlite};
 use std::cmp::Ordering;
 use std::fmt::Write as _;
 use std::num::ParseIntError;
@@ -46,7 +48,7 @@ impl Display for WordleError {
 impl Error for WordleError {}
 
 struct Bot {
-    database: sqlx::SqlitePool,
+    database: Database,
 }
 
 // Assumes sorted input
@@ -87,87 +89,12 @@ fn recalcualate_high_scores(high_scores: [Option<i64>; 3], score: i64) -> [Optio
 }
 
 impl Bot {
-    async fn get_daily_day(&self) -> i64 {
-        sqlx::query!("SELECT max(id) as id from daily")
-            .fetch_one(&self.database)
-            .await
-            .unwrap()
-            .id
-            .into()
-    }
-    async fn get_silver_medalist(&self, day: Option<i64>) -> Option<Vec<(i64, i64, i64)>> {
-        let day = if day.is_none() {
-            self.get_daily_day().await
-        } else {
-            day.unwrap()
-        };
-        let medalist: Vec<_> = sqlx::query!("SELECT * from score_sheet WHERE day = ? AND score = (SELECT silver from daily where id = ?)", day, day)
-        .fetch_all(&self.database)
-        .await
-        .unwrap();
-        dbg!(&medalist);
-        let medalist: Vec<_> = medalist
-            .iter()
-            .map(|sheet| (sheet.player_id, sheet.msg_id, sheet.score))
-            .collect();
-        dbg!(&medalist);
-        if medalist.len() == 0 {
-            None
-        } else {
-            Some(medalist)
-        }
-    }
-    async fn get_bronze_medalist(&self, day: Option<i64>) -> Option<Vec<(i64, i64, i64)>> {
-        let day = if day.is_none() {
-            self.get_daily_day().await
-        } else {
-            day.unwrap()
-        };
-        let medalist: Vec<_> = sqlx::query!("SELECT * from score_sheet WHERE day = ? AND score = (SELECT bronze from daily where id = ?)", day, day)
-        .fetch_all(&self.database)
-        .await
-        .unwrap();
-        dbg!(&medalist);
-        let medalist: Vec<_> = medalist
-            .iter()
-            .map(|sheet| (sheet.player_id, sheet.msg_id, sheet.score))
-            .collect();
-        dbg!(&medalist);
-        if medalist.len() == 0 {
-            None
-        } else {
-            Some(medalist)
-        }
-    }
-    async fn get_gold_medalist(&self, day: Option<i64>) -> Option<Vec<(i64, i64, i64)>> {
-        let day = if day.is_none() {
-            self.get_daily_day().await
-        } else {
-            day.unwrap()
-        };
-        let medalist: Vec<_> = sqlx::query!("SELECT * from score_sheet WHERE day = ? AND score = (SELECT gold from daily where id = ?)", day, day)
-            .fetch_all(&self.database)
-            .await
-            .unwrap();
-        dbg!(&medalist);
-        let medalist: Vec<_> = medalist
-            .iter()
-            .map(|sheet| (sheet.player_id, sheet.msg_id, sheet.score))
-            .collect();
-        dbg!(&medalist);
-        if medalist.len() == 0 {
-            None
-        } else {
-            Some(medalist)
-        }
-    }
-
     async fn stats(&self, user_id: i64) -> String {
         let mut response: String = String::from("");
         let gold_medals = self.get_user_medals(Placement::Gold, user_id).await;
         let silver_medals = self.get_user_medals(Placement::Silver, user_id).await;
         let bronze_medals = self.get_user_medals(Placement::Bronze, user_id).await;
-        let played_games = self.get_user_played_games(user_id).await;
+        let played_games = self.database.get_user_played_games(user_id).await;
 
         writeln!(response, "Antal spelade spel: **{}**", played_games).unwrap();
         writeln!(
@@ -194,7 +121,7 @@ impl Bot {
 
         writeln!(response, "").unwrap();
 
-        let scores = self.get_user_scores(user_id).await;
+        let scores = self.database.get_user_scores(user_id).await;
         let total: f64 = scores.len() as f64;
         let mut score_count: HashMap<i64, f64> = HashMap::from([
             (0, 0.0),
@@ -229,9 +156,18 @@ impl Bot {
     async fn set_medals(&self, day: i64, channel_id: ChannelId, http: &Context) {
         // playerId, msgId, score
         for (p, medalists) in [
-            (Placement::Gold, self.get_gold_medalist(Some(day)).await),
-            (Placement::Silver, self.get_silver_medalist(Some(day)).await),
-            (Placement::Bronze, self.get_bronze_medalist(Some(day)).await),
+            (
+                Placement::Gold,
+                self.database.get_gold_medalist(Some(day)).await,
+            ),
+            (
+                Placement::Silver,
+                self.database.get_silver_medalist(Some(day)).await,
+            ),
+            (
+                Placement::Bronze,
+                self.database.get_bronze_medalist(Some(day)).await,
+            ),
         ] {
             if medalists.is_none() {
                 continue;
@@ -253,9 +189,18 @@ impl Bot {
     async fn clear_medals(&self, day: i64, channel_id: ChannelId, http: &Context) {
         // playerId, msgId, score
         for (p, medalists) in [
-            (Placement::Gold, self.get_gold_medalist(Some(day)).await),
-            (Placement::Silver, self.get_silver_medalist(Some(day)).await),
-            (Placement::Bronze, self.get_bronze_medalist(Some(day)).await),
+            (
+                Placement::Gold,
+                self.database.get_gold_medalist(Some(day)).await,
+            ),
+            (
+                Placement::Silver,
+                self.database.get_silver_medalist(Some(day)).await,
+            ),
+            (
+                Placement::Bronze,
+                self.database.get_bronze_medalist(Some(day)).await,
+            ),
         ] {
             if medalists.is_none() {
                 continue;
@@ -274,18 +219,12 @@ impl Bot {
         }
     }
     // TODO: This return type is horrible
-    async fn new_score_sheet(&self, msg: &Message) -> Option<(i64, i64, i64)> {
+    async fn new_score_sheet(&self, msg: &Message) -> Option<()> {
         let player_id = msg.author.id.0 as i64;
         let msg_id = msg.id.0 as i64;
         let score_sheet = msg.content.strip_prefix("Wordle").unwrap();
         // Create new player if not exists
-        sqlx::query!(
-            "INSERT INTO player (id) VALUES (?) ON CONFLICT DO NOTHING",
-            player_id
-        )
-        .execute(&self.database)
-        .await
-        .unwrap();
+        self.database.new_player(player_id).await;
         let (day, score) = match parse_wordle_msg(score_sheet) {
             Ok(x) => x,
             Err(e) => {
@@ -294,44 +233,13 @@ impl Bot {
             }
         };
         // TODO: Is there a better place to do this to avoid runtime error if this is not executed first?
-        sqlx::query!(
-            "INSERT INTO daily (id) VALUES (?) ON CONFLICT DO NOTHING",
-            day
-        )
-        .execute(&self.database)
-        .await
-        .unwrap();
+        self.database.new_daily(day).await;
         debug!("Day: {}, Score: {}", day, score);
         self.new_daily_score(Some(day), score).await;
-
-        // Conflict = Cheater
-        let score_sheet = sqlx::query!(
-        "INSERT INTO score_sheet (msg_id, day, player_id, score) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING",
-        msg_id,
-        day,
-        player_id,
-        score,
-    )
-    .execute(&self.database) // < Where the command will be executed
-    .await
-    .unwrap()
-    .last_insert_rowid();
-        Some((score_sheet, score, day))
-    }
-
-    async fn get_daily_high_scores(&self, day: i64) -> [Option<i64>; 3] {
-        let scores = match sqlx::query!("SELECT gold, silver, bronze FROM daily WHERE id = ?", day)
-            .fetch_one(&self.database)
-            .await
-        {
-            Ok(x) => x,
-            Err(e) => {
-                error!("{e}");
-                panic!();
-            }
-        };
-
-        [scores.gold, scores.silver, scores.bronze]
+        self.database
+            .new_score_sheet(msg_id, day, player_id, score)
+            .await;
+        Some(())
     }
 
     // TODO: Run on connect, exit when encounter day already in database
@@ -356,66 +264,68 @@ impl Bot {
         info!("Old messages read: {msg_count}");
     }
 
-    async fn new_daily_score(&self, day: Option<i64>, score: i64) {
-        if score == 0 {
-            return;
-        }
-        let day = day.unwrap_or(self.get_daily_day().await);
-        let high_scores = self.get_daily_high_scores(day).await;
-        let high_scores = recalcualate_high_scores(high_scores, score);
-        sqlx::query!(
-            "UPDATE daily SET (gold, silver, bronze) = (?, ?, ?) WHERE id = ?",
-            high_scores[0],
-            high_scores[1],
-            high_scores[2],
-            day
-        )
-        .execute(&self.database)
-        .await
-        .unwrap();
-    }
-
-    async fn get_user_played_games(&self, user_id: i64) -> i32 {
-        sqlx::query!(
-            "SELECT COUNT(id) as count FROM score_sheet WHERE player_id = ?",
-            user_id
-        )
-        .fetch_one(&self.database)
-        .await
-        .unwrap()
-        .count
-    }
-
     async fn get_user_medals(&self, medal: Placement, user_id: i64) -> i32 {
         match medal {
-            Placement::Gold => self.get_user_gold_medals(user_id).await,
-            Placement::Silver => self.get_user_silver_medals(user_id).await,
-            Placement::Bronze => self.get_user_bronze_medals(user_id).await,
+            Placement::Gold => self.database.get_user_gold_medals(user_id).await,
+            Placement::Silver => self.database.get_user_silver_medals(user_id).await,
+            Placement::Bronze => self.database.get_user_bronze_medals(user_id).await,
             Placement::Loser => panic!(),
         }
     }
 
-    async fn get_user_gold_medals(&self, user_id: i64) -> i32 {
-        sqlx::query!("SELECT COUNT(score) as amount FROM score_sheet JOIN daily ON score_sheet.score = daily.gold AND score_sheet.day = daily.id AND score_sheet.player_id = ?", user_id).fetch_one(&self.database).await.unwrap().amount
+    async fn new_daily_score(&self, day: Option<i64>, score: i64) {
+        if score == 0 {
+            return;
+        }
+        let day = day.unwrap_or(self.database.get_daily_day().await);
+        let high_scores = self.database.get_daily_high_scores(day).await;
+        let high_scores = recalcualate_high_scores(high_scores, score);
+        self
+            .database
+            .update_daily(day, high_scores[0], high_scores[1], high_scores[2])
+            .await;
     }
-
-    async fn get_user_silver_medals(&self, user_id: i64) -> i32 {
-        sqlx::query!("SELECT COUNT(score) as amount FROM score_sheet JOIN daily ON score_sheet.score = daily.silver AND score_sheet.day = daily.id AND score_sheet.player_id = ?", user_id).fetch_one(&self.database).await.unwrap().amount
-    }
-
-    async fn get_user_bronze_medals(&self, user_id: i64) -> i32 {
-        sqlx::query!("SELECT COUNT(score) as amount FROM score_sheet JOIN daily ON score_sheet.score = daily.bronze AND score_sheet.day = daily.id AND score_sheet.player_id = ?", user_id).fetch_one(&self.database).await.unwrap().amount
-    }
-
-    async fn get_user_scores(&self, user_id: i64) -> Vec<i64> {
-        // Gran all wordle scores
-        sqlx::query!("SELECT score FROM score_sheet WHERE player_id = ?", user_id)
-            .fetch_all(&self.database)
-            .await
-            .unwrap_or_default()
-            .iter()
-            .map(|r| r.score)
-            .collect()
+    // Calculate the current score of all players
+    // The wordle scores are used as indexes into the fibonachi sequence
+    // to lend more weight to earlier correct guesses
+    // TODO: Result return type
+    async fn score(&self, total: bool, cache: &impl CacheHttp, guild_id: GuildId) -> String {
+        let from_day = {
+            if total {
+                0
+            } else {
+                DAY_OF_INCEPTION
+            }
+        };
+        let mut leader_board: Vec<(String, u32)> = vec![];
+        // Failure (X) gives a score of zero
+        let fib: [u32; 7] = [0, 13, 8, 5, 3, 2, 1];
+        let players = &self.database.get_players().await;
+        for player_id in players {
+            let user = get_nick(*player_id, guild_id, cache).await;
+            let scores = &self
+                .database
+                .get_player_scores_from_day(from_day, *player_id)
+                .await;
+            let mut result: u32 = 0;
+            for score in scores {
+                result = result + fib[*score as usize];
+            }
+            leader_board.push((user, result));
+        }
+        leader_board.sort_by_key(|x| x.1);
+        leader_board.reverse();
+        let header = {
+            if total {
+                "Ställning i totala världscupen:".to_string()
+            } else {
+                "Ställning i världscupen:".to_string()
+            }
+        };
+        let response: String = leader_board.iter().fold(header, |acc, (user, score)| {
+            format!("{acc}\n\t{user}: {score}")
+        });
+        response
     }
 }
 
@@ -470,8 +380,6 @@ impl Display for Placement {
     }
 }
 
-type Database = sqlx::Pool<sqlx::Sqlite>;
-
 // Returns wordle number and score
 fn parse_wordle_msg(msg: &str) -> Result<(i64, i64)> {
     debug!("{msg}");
@@ -507,61 +415,6 @@ fn parse_wordle_msg(msg: &str) -> Result<(i64, i64)> {
     Ok((wordle_number, score))
 }
 
-// Calculate the current score of all players
-// The wordle scores are used as indexes into the fibonachi sequence
-// to lend more weight to earlier correct guesses
-// TODO: Result return type
-async fn score(
-    total: bool,
-    db: &sqlx::Pool<sqlx::Sqlite>,
-    cache: &impl CacheHttp,
-    guild_id: GuildId,
-) -> String {
-    let from_day = {
-        if total {
-            0
-        } else {
-            DAY_OF_INCEPTION
-        }
-    };
-    let mut leader_board: Vec<(String, u32)> = vec![];
-    // Failure (X) gives a score of zero
-    let fib: [u32; 7] = [0, 13, 8, 5, 3, 2, 1];
-    let players = sqlx::query!("SELECT id FROM player")
-        .fetch_all(db)
-        .await
-        .unwrap();
-    for player in players {
-        let user = get_nick(player.id, guild_id, cache).await;
-        let scores = sqlx::query!(
-            "SELECT score FROM score_sheet WHERE player_id = ? AND day >= ?",
-            player.id,
-            from_day
-        )
-        .fetch_all(db)
-        .await
-        .unwrap();
-        let mut result: u32 = 0;
-        for score in scores {
-            result = result + fib[score.score as usize];
-        }
-        leader_board.push((user, result));
-    }
-    leader_board.sort_by_key(|x| x.1);
-    leader_board.reverse();
-    let header = {
-        if total {
-            "Ställning i totala världscupen:".to_string()
-        } else {
-            "Ställning i världscupen:".to_string()
-        }
-    };
-    let response: String = leader_board.iter().fold(header, |acc, (user, score)| {
-        format!("{acc}\n\t{user}: {score}")
-    });
-    response
-}
-
 /// Tries to get the nick of the user, if it fails returns the user name
 async fn get_nick(user_id: i64, guild_id: GuildId, cache: &impl CacheHttp) -> String {
     debug!("User id: {user_id}");
@@ -590,29 +443,6 @@ impl Placement {
             Placement::Silver => Placement::Bronze,
             _ => Placement::Loser,
         }
-    }
-}
-
-async fn get_scores(day: Option<i64>, db: &Database) -> Vec<(i64, (i64, i64))> {
-    if let Some(day) = day {
-        sqlx::query!(
-            "SELECT player_id, msg_id, score FROM score_sheet where day = ? ORDER BY score DESC",
-            day
-        )
-        .fetch_all(db)
-        .await
-        .unwrap()
-        .iter()
-        .map(|x| (x.score, (x.msg_id, x.player_id)))
-        .collect()
-    } else {
-        sqlx::query!("SELECT msg_id, player_id, score FROM score_sheet where day = (SELECT max(day) from score_sheet) ORDER BY score DESC")
-    .fetch_all(db)
-    .await
-        .unwrap()
-        .iter()
-        .map(|x| (x.score, (x.msg_id, x.player_id)))
-        .collect()
     }
 }
 
@@ -724,31 +554,29 @@ impl EventHandler for Bot {
             self.set_medals(day, msg.channel_id, &ctx).await;
         } else if msg.content.eq("!ställning") {
             debug!("!ställning");
-            let response = score(
-                false,
-                &self.database,
-                &ctx.http,
-                msg.guild_id.unwrap().into(),
-            )
-            .await;
+            let response = &self
+                .score(false, &ctx.http, msg.guild_id.unwrap().into())
+                .await;
             msg.channel_id.say(&ctx, response).await.unwrap();
         } else if msg.content.eq("!ställning totala") {
             debug!("!ställning");
-            let response = score(
-                true,
-                &self.database,
-                &ctx.http,
-                msg.guild_id.unwrap().into(),
-            )
-            .await;
+            let response = &self
+                .score(true, &ctx.http, msg.guild_id.unwrap().into())
+                .await;
             msg.channel_id.say(&ctx, response).await.unwrap();
         } else if msg.content.starts_with("!dagens") {
             debug!("!dagens");
             let mut response = String::from("Dagens placering:\n");
             for (placement, medalists) in [
-                (Placement::Gold, self.get_gold_medalist(None).await),
-                (Placement::Silver, self.get_silver_medalist(None).await),
-                (Placement::Bronze, self.get_bronze_medalist(None).await),
+                (Placement::Gold, self.database.get_gold_medalist(None).await),
+                (
+                    Placement::Silver,
+                    self.database.get_silver_medalist(None).await,
+                ),
+                (
+                    Placement::Bronze,
+                    self.database.get_bronze_medalist(None).await,
+                ),
             ] {
                 if medalists.is_none() {
                     continue;
@@ -852,6 +680,8 @@ async fn main() {
         .run(&database)
         .await
         .expect("Couldn't run database migrations");
+
+    let database = Database::new("database.sqlite").await;
 
     let bot = Bot { database };
 
