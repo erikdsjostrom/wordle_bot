@@ -1,23 +1,41 @@
+mod command;
 mod database;
+mod player;
+mod utils;
+
 use database::Database;
+use utils::{
+    cup_number_from_unixtime, current_cup_number_cute_format, parse_wordle_msg,
+    recalcualate_high_scores,
+};
+
+use command::stats::stats;
 
 use rand::Rng;
-use std::cmp::Ordering;
 use std::fmt::Write as _;
 use std::num::ParseIntError;
-use std::{collections::HashMap, error::Error, fmt::Display};
+use std::sync::Arc;
+use std::time::Duration;
+use std::{error::Error, fmt::Display};
 
 use dotenv::dotenv;
 use log::{debug, error, info};
 
 use serenity::async_trait;
 
-use serenity::http::CacheHttp;
+use serenity::futures::StreamExt;
 use serenity::model::prelude::*;
 use serenity::prelude::*;
 
+use crate::command::daily::fetch_daily_result;
+use crate::command::score::{
+    cup_leader, current_cup_leader, current_cup_score, score_since_inception, total_cup_score, FIB,
+};
+use crate::utils::current_cup_number;
+
 const TESTING_GUILD_ID: u64 = 1065015105437319428;
-const DAY_OF_INCEPTION: i64 = 580;
+const CHANNEL_ID: u64 = 938727764037619712;
+const GUILD_ID: u64 = 486522741395161108;
 
 type Result<T> = std::result::Result<T, WordleError>;
 
@@ -48,109 +66,18 @@ impl Display for WordleError {
 impl Error for WordleError {}
 
 struct Bot {
-    database: Database,
-}
-
-// Assumes sorted input
-fn recalcualate_high_scores(high_scores: [Option<i64>; 3], score: i64) -> [Option<i64>; 3] {
-    match (high_scores[0], high_scores[1], high_scores[2]) {
-        (None, None, None) => [Some(score), None, None],
-        (Some(gold), None, None) => match gold.cmp(&score) {
-            Ordering::Greater => [Some(score), Some(gold), None],
-            Ordering::Equal => [Some(gold), None, None],
-            Ordering::Less => [Some(gold), Some(score), None],
-        },
-        (Some(gold), Some(silver), None) => match (gold.cmp(&score), silver.cmp(&score)) {
-            (Ordering::Greater, _) => [Some(score), Some(gold), Some(silver)],
-            (Ordering::Equal, _) => [Some(gold), Some(silver), None],
-            (Ordering::Less, Ordering::Greater) => [Some(gold), Some(score), Some(silver)],
-            (Ordering::Less, Ordering::Equal) => [Some(gold), Some(silver), None],
-            (Ordering::Less, Ordering::Less) => [Some(gold), Some(silver), Some(score)],
-        },
-        (Some(gold), Some(silver), Some(bronze)) => {
-            match (gold.cmp(&score), silver.cmp(&score), bronze.cmp(&score)) {
-                (Ordering::Greater, _, _) => [Some(score), Some(gold), Some(silver)],
-                (Ordering::Equal, _, _) => [Some(gold), Some(silver), Some(bronze)],
-                (Ordering::Less, Ordering::Equal, _) => [Some(gold), Some(silver), Some(bronze)],
-                (Ordering::Less, Ordering::Greater, _) => [Some(gold), Some(score), Some(silver)],
-                (Ordering::Less, Ordering::Less, Ordering::Less) => {
-                    [Some(gold), Some(silver), Some(bronze)]
-                }
-                (Ordering::Less, Ordering::Less, Ordering::Equal) => {
-                    [Some(gold), Some(silver), Some(bronze)]
-                }
-                (Ordering::Less, Ordering::Less, Ordering::Greater) => {
-                    [Some(gold), Some(silver), Some(score)]
-                }
-            }
-        }
-        _ => unreachable!(),
-    }
+    database: Arc<Database>,
 }
 
 impl Bot {
-    async fn stats(&self, user_id: i64) -> String {
-        let mut response: String = String::from("");
-        let gold_medals = self.get_user_medals(Placement::Gold, user_id).await;
-        let silver_medals = self.get_user_medals(Placement::Silver, user_id).await;
-        let bronze_medals = self.get_user_medals(Placement::Bronze, user_id).await;
-        let played_games = self.database.get_user_played_games(user_id).await;
-
-        writeln!(response, "Antal spelade spel: **{}**", played_games).unwrap();
-        writeln!(
-            response,
-            "{} medaljer: **{}**",
-            Placement::Gold.to_string(),
-            gold_medals
-        )
-        .unwrap();
-        writeln!(
-            response,
-            "{} medaljer: **{}**",
-            Placement::Silver.to_string(),
-            silver_medals
-        )
-        .unwrap();
-        writeln!(
-            response,
-            "{} medaljer: **{}**",
-            Placement::Bronze.to_string(),
-            bronze_medals
-        )
-        .unwrap();
-
-        writeln!(response, "").unwrap();
-
-        let scores = self.database.get_user_scores(user_id).await;
-        let total: f64 = scores.len() as f64;
-        let mut score_count: HashMap<i64, f64> = HashMap::from([
-            (0, 0.0),
-            (1, 0.0),
-            (2, 0.0),
-            (3, 0.0),
-            (4, 0.0),
-            (5, 0.0),
-            (6, 0.0),
-        ]);
-        dbg!(&scores);
-        for score in scores {
-            *score_count.get_mut(&score).unwrap() += 1.0;
-        }
-        dbg!(&score_count);
-        writeln!(response, "Poängfördelning:").unwrap();
-        for score in [0, 1, 2, 3, 4, 5, 6] {
-            let ratio = 100.0 * score_count[&score] / total;
-            writeln!(
-                response,
-                "{}\t|\t{}|\t{}",
-                score.to_string(),
-                "█".repeat(ratio as usize),
-                score_count[&score]
-            )
-            .unwrap();
-        }
-
-        response
+    async fn set_status_to_current_leader(&self, ctx: &Context) {
+        if let Some(player) = current_cup_leader(&self.database).await {
+            let nick = player.get_nick(GUILD_ID.into(), ctx).await.unwrap();
+            let msg = format!("Nuvarande cupledare: {nick}");
+            ctx.set_activity(Activity::competing(msg)).await;
+        } else {
+            ctx.set_presence(None, OnlineStatus::Idle).await;
+        };
     }
 
     async fn set_medals(&self, day: i64, channel_id: ChannelId, http: &Context) {
@@ -220,6 +147,7 @@ impl Bot {
     }
     // TODO: This return type is horrible
     async fn new_score_sheet(&self, msg: &Message) -> Option<()> {
+        let cup_number = cup_number_from_unixtime(msg.timestamp.unix_timestamp());
         let player_id = msg.author.id.0 as i64;
         let msg_id = msg.id.0 as i64;
         let score_sheet = msg.content.strip_prefix("Wordle").unwrap();
@@ -234,16 +162,14 @@ impl Bot {
         };
         // TODO: Is there a better place to do this to avoid runtime error if this is not executed first?
         self.database.new_daily(day).await;
-        debug!("Day: {}, Score: {}", day, score);
+        debug!("Day: {}, Score: {}, Cup number: {}", day, score, cup_number);
         self.new_daily_score(Some(day), score).await;
         self.database
-            .new_score_sheet(msg_id, day, player_id, score)
+            .new_score_sheet(msg_id, day, player_id, score, cup_number)
             .await;
         Some(())
     }
 
-    // TODO: Run on connect, exit when encounter day already in database
-    // A continious application of GetMessages should do the trick
     async fn read_old_messages(&self, channel_id: ChannelId, http: &Context) {
         debug!("Reading old messages");
         let mut msg_count: i64 = 0;
@@ -264,15 +190,6 @@ impl Bot {
         info!("Old messages read: {msg_count}");
     }
 
-    async fn get_user_medals(&self, medal: Placement, user_id: i64) -> i32 {
-        match medal {
-            Placement::Gold => self.database.get_user_gold_medals(user_id).await,
-            Placement::Silver => self.database.get_user_silver_medals(user_id).await,
-            Placement::Bronze => self.database.get_user_bronze_medals(user_id).await,
-            Placement::Loser => panic!(),
-        }
-    }
-
     async fn new_daily_score(&self, day: Option<i64>, score: i64) {
         if score == 0 {
             return;
@@ -280,89 +197,14 @@ impl Bot {
         let day = day.unwrap_or(self.database.get_daily_day().await);
         let high_scores = self.database.get_daily_high_scores(day).await;
         let high_scores = recalcualate_high_scores(high_scores, score);
-        self
-            .database
+        self.database
             .update_daily(day, high_scores[0], high_scores[1], high_scores[2])
             .await;
     }
-    // Calculate the current score of all players
-    // The wordle scores are used as indexes into the fibonachi sequence
-    // to lend more weight to earlier correct guesses
-    // TODO: Result return type
-    async fn score(&self, total: bool, cache: &impl CacheHttp, guild_id: GuildId) -> String {
-        let from_day = {
-            if total {
-                0
-            } else {
-                DAY_OF_INCEPTION
-            }
-        };
-        let mut leader_board: Vec<(String, u32)> = vec![];
-        // Failure (X) gives a score of zero
-        let fib: [u32; 7] = [0, 13, 8, 5, 3, 2, 1];
-        let players = &self.database.get_players().await;
-        for player_id in players {
-            let user = get_nick(*player_id, guild_id, cache).await;
-            let scores = &self
-                .database
-                .get_player_scores_from_day(from_day, *player_id)
-                .await;
-            let mut result: u32 = 0;
-            for score in scores {
-                result = result + fib[*score as usize];
-            }
-            leader_board.push((user, result));
-        }
-        leader_board.sort_by_key(|x| x.1);
-        leader_board.reverse();
-        let header = {
-            if total {
-                "Ställning i totala världscupen:".to_string()
-            } else {
-                "Ställning i världscupen:".to_string()
-            }
-        };
-        let response: String = leader_board.iter().fold(header, |acc, (user, score)| {
-            format!("{acc}\n\t{user}: {score}")
-        });
-        response
-    }
-}
-
-fn graph_scores(scores: Vec<i64>) -> String {
-    let total: f64 = scores.len() as f64;
-    let mut score_count: HashMap<i64, f64> = HashMap::from([
-        (0, 0.0),
-        (1, 0.0),
-        (2, 0.0),
-        (3, 0.0),
-        (4, 0.0),
-        (5, 0.0),
-        (6, 0.0),
-    ]);
-    dbg!(&scores);
-    for score in scores {
-        *score_count.get_mut(&score).unwrap() += 1.0;
-    }
-    dbg!(&score_count);
-    let mut graph = String::from("Poängfördelning:\n");
-    for score in [0, 1, 2, 3, 4, 5, 6] {
-        let ratio = 100.0 * score_count[&score] / total;
-        dbg!(&ratio);
-        dbg!("#".repeat(ratio as usize));
-        writeln!(
-            graph,
-            "{} | {}",
-            score.to_string(),
-            "#".repeat(ratio as usize)
-        )
-        .unwrap();
-    }
-    graph
 }
 
 #[derive(Debug, Hash, PartialEq, Eq, Copy, Clone)]
-enum Placement {
+pub enum Placement {
     Gold,
     Silver,
     Bronze,
@@ -380,151 +222,20 @@ impl Display for Placement {
     }
 }
 
-// Returns wordle number and score
-fn parse_wordle_msg(msg: &str) -> Result<(i64, i64)> {
-    debug!("{msg}");
-    let mut msg = msg.trim().split(' ');
-    let wordle_number: i64 = match msg.next() {
-        Some(it) => it,
-        None => {
-            return Err(WordleError::ParseError(
-                "Wordle number not found while parsing.".to_string(),
-            ))
-        }
-    }
-    .parse()?;
-    let score: i64 = match msg
-        .next()
-        .ok_or(WordleError::ParseError(String::from(
-            "Wordle message does not contain a score.",
-        )))?
-        .chars()
-        .next()
-        .ok_or(WordleError::ParseError(String::from(
-            "Unable to split score into chars.",
-        )))? {
-        'X' | '0' => 0, // Ok, since there's no 0 guess score
-        '1' => 1,
-        '2' => 2,
-        '3' => 3,
-        '4' => 4,
-        '5' => 5,
-        '6' => 6,
-        x => return Err(WordleError::IlleagalNumberOfGuesses(x)),
-    };
-    Ok((wordle_number, score))
-}
-
-/// Tries to get the nick of the user, if it fails returns the user name
-async fn get_nick(user_id: i64, guild_id: GuildId, cache: &impl CacheHttp) -> String {
-    debug!("User id: {user_id}");
-    let user_id = UserId(user_id as u64);
-    let user = match user_id.to_user(cache).await {
-        Ok(user) => user,
-        Err(e) => {
-            error!("Error: {e}");
-            return String::from("Unknown user");
-        }
-    };
-    if let Some(nick) = user.nick_in(cache, guild_id).await {
-        nick
-    } else {
-        debug!("No nick found for user: {}", user.name);
-        user.name
-    }
-}
-
-use serenity::futures::StreamExt;
-
-impl Placement {
-    fn dec(&self) -> Placement {
-        match self {
-            Placement::Gold => Placement::Silver,
-            Placement::Silver => Placement::Bronze,
-            _ => Placement::Loser,
-        }
-    }
-}
-
-// Assumes sorted input
-fn calculate_placements(
-    mut scores: Vec<(i64, (i64, i64))>,
-) -> HashMap<Placement, (i64, Vec<(i64, i64)>)> {
-    dbg!(&scores);
-    let mut placements: HashMap<Placement, (i64, Vec<(i64, i64)>)> = HashMap::new();
-    let mut current_score: i64 = 10;
-    let mut current_placement: Placement = Placement::Gold;
-    scores.sort_by_key(|x| x.0);
-    dbg!(&scores);
-    for (score, id) in scores {
-        if score == 0 {
-            todo!();
-        }
-        match (
-            placements.get(&Placement::Gold),
-            placements.get(&Placement::Silver),
-            placements.get(&Placement::Bronze),
-        ) {
-            (None, _, _) => _ = placements.insert(Placement::Gold, (score, vec![id])),
-            (Some(x @ (gold_score, _)), None, None) => match score.cmp(&gold_score) {
-                Ordering::Less => _ = placements.insert(Placement::Silver, (score, vec![id])),
-                Ordering::Equal => placements.get_mut(&Placement::Gold).unwrap().1.push(id),
-                Ordering::Greater => {
-                    placements.insert(Placement::Silver, x.clone());
-                    placements.insert(Placement::Gold, (score, vec![id]));
-                }
-            },
-            (Some(x @ (gold_score, _)), Some(y @ (silver_score, _)), None) => {
-                match (score.cmp(&gold_score), score.cmp(&silver_score)) {
-                    (Ordering::Less, Ordering::Less) => {
-                        _ = placements.insert(Placement::Bronze, (score, vec![id]))
-                    }
-                    (Ordering::Less, Ordering::Equal) => {
-                        placements.get_mut(&Placement::Silver).unwrap().1.push(id)
-                    }
-                    (Ordering::Less, Ordering::Greater) => {
-                        placements.insert(Placement::Bronze, y.clone());
-                        placements.insert(Placement::Silver, (score, vec![id]));
-                    }
-                    (Ordering::Equal, _) => {
-                        placements.get_mut(&Placement::Gold).unwrap().1.push(id)
-                    }
-                    (Ordering::Greater, _) => {
-                        // placements.insert(Placement::Bronze, y.clone());
-                        // placements.insert(Placement::Silver, x.clone());
-                        // placements.insert(Placement::Gold, (score, vec![id]));
-                        todo!();
-                    }
-                }
-            }
-            (Some(_), Some(_), Some(_)) => todo!(),
-            _ => unreachable!(),
-        };
-        // Don't give losers gold medals
-        if score == 0 {
-            if let Some(v) = placements.get_mut(&Placement::Loser) {
-                v.1.push(id);
-            } else {
-                placements.insert(Placement::Loser, (score, vec![id]));
-            }
-            continue;
-        } else if placements.is_empty() {
-            current_placement = Placement::Gold;
-        } else if score != current_score {
-            current_placement = current_placement.dec();
-        }
-        current_score = score;
-        if let Some(v) = placements.get_mut(&current_placement) {
-            v.1.push(id);
-        } else {
-            placements.insert(current_placement, (score, vec![id]));
-        }
-    }
-    placements
-}
-
 #[async_trait]
 impl EventHandler for Bot {
+    async fn ready(&self, ctx: Context, ready: Ready) {
+        debug!("{} is connected!", ready.user.name);
+        let database = Arc::clone(&self.database);
+        tokio::spawn(async move {
+            check_if_cup_winner(ctx.clone(), Arc::clone(&database)).await;
+        });
+    }
+
+    async fn cache_ready(&self, _ctx: Context, _guilds: Vec<GuildId>) {
+        debug!("Cache ready.");
+    }
+
     async fn message(&self, ctx: Context, msg: Message) {
         let _is_testing: bool = match msg.guild_id {
             Some(guild_id) => {
@@ -542,99 +253,131 @@ impl EventHandler for Bot {
             }
         };
         if msg.content == "!stats" {
-            let response = self.stats(msg.author.id.0 as i64).await;
+            let response = stats(msg.author.id.0 as i64, &self.database).await;
             msg.channel_id.say(&ctx, response).await.unwrap();
         }
         if msg.content.starts_with("Wordle") {
-            _ = self.new_score_sheet(&msg).await;
             let score_sheet = msg.content.strip_prefix("Wordle").unwrap();
-            let (day, score) = parse_wordle_msg(score_sheet).unwrap();
+            let (day, _) = parse_wordle_msg(score_sheet).unwrap();
             self.clear_medals(day, msg.channel_id, &ctx).await;
-            self.new_daily_score(Some(day), score).await;
+            _ = self.new_score_sheet(&msg).await;
             self.set_medals(day, msg.channel_id, &ctx).await;
+            self.set_status_to_current_leader(&ctx).await;
+        } else if msg.content.eq("!ställning alt") {
+            let score = score_since_inception(&self.database).await;
+            let mut response = "Ställning i världscupen:\n".to_string();
+            for (player, result) in score {
+                let user = player
+                    .get_nick(GUILD_ID.into(), &ctx.http)
+                    .await
+                    .unwrap_or(String::from("Unknown user"));
+                writeln!(response, "\t{user}: {result}").unwrap();
+            }
+            msg.channel_id.say(&ctx, response).await.unwrap();
         } else if msg.content.eq("!ställning") {
-            debug!("!ställning");
-            let response = &self
-                .score(false, &ctx.http, msg.guild_id.unwrap().into())
-                .await;
+            let score = current_cup_score(&self.database).await;
+            let cup_number = current_cup_number_cute_format();
+            let mut response = format!("Ställning i månadscupen {}:\n", cup_number);
+            for (player, result) in score {
+                let user = player
+                    .get_nick(GUILD_ID.into(), &ctx.http)
+                    .await
+                    .unwrap_or(String::from("Unknown user"));
+                writeln!(response, "\t{user}: {result}").unwrap();
+            }
             msg.channel_id.say(&ctx, response).await.unwrap();
         } else if msg.content.eq("!ställning totala") {
-            debug!("!ställning");
-            let response = &self
-                .score(true, &ctx.http, msg.guild_id.unwrap().into())
-                .await;
+            let score = total_cup_score(&self.database).await;
+            let mut response = "Ställning i totala världscupen:\n".to_string();
+            for (player, result) in score {
+                let user = player
+                    .get_nick(GUILD_ID.into(), &ctx.http)
+                    .await
+                    .unwrap_or(String::from("Unknown user"));
+                writeln!(response, "\t{user}: {result}").unwrap();
+            }
             msg.channel_id.say(&ctx, response).await.unwrap();
         } else if msg.content.starts_with("!dagens") {
             debug!("!dagens");
+            let daily = fetch_daily_result(&self.database).await;
             let mut response = String::from("Dagens placering:\n");
-            for (placement, medalists) in [
-                (Placement::Gold, self.database.get_gold_medalist(None).await),
-                (
-                    Placement::Silver,
-                    self.database.get_silver_medalist(None).await,
-                ),
-                (
-                    Placement::Bronze,
-                    self.database.get_bronze_medalist(None).await,
-                ),
-            ] {
+            for (placement, medalists) in daily {
                 if medalists.is_none() {
-                    continue;
+                    break;
                 }
                 let medalists = medalists.unwrap();
-                let mut user_list = vec![];
-                let mut score = 0;
-                for (player_id, _, new_score) in medalists {
-                    score = new_score;
-                    let ass = get_nick(player_id, msg.guild_id.unwrap(), &ctx.http).await;
-                    user_list.push(ass);
-                }
-                let mut users = String::from("");
-                let mut iter = user_list.into_iter().peekable();
-                while let Some(user) = iter.next() {
-                    users.push_str(&user);
-                    if iter.peek().is_some() {
+                let mut users = String::default();
+                for player in medalists.0 {
+                    let nick = player.get_nick(GUILD_ID.into(), &ctx.http).await.unwrap();
+                    if !users.is_empty() {
                         users.push_str(", ");
                     }
+                    users.push_str(&nick);
                 }
                 // XXX
                 _ = writeln!(
                     response,
-                    "{} - {} - {} försök",
+                    "{} - {} - {} försök ({}p)",
                     placement.to_string(),
                     users,
-                    score
+                    medalists.1,
+                    FIB[medalists.1 as usize]
                 );
             }
             msg.channel_id.say(&ctx, response).await.unwrap();
         } else if msg.content == "!hurlångkukharjonathancissig" {
             let kuk_svar = match rand::thread_rng().gen_range(1..11) {
                 10 => format!("Vilken kuk?"),
-                9 => format!("runtime error: unsigned integer underflow: jompis_kuk.length() cannot be represented in type 'uint'"),
                 x => format!("Jonathan Cissigs kuk är {x} cm lång."),
             };
             msg.channel_id.say(&ctx, kuk_svar).await.unwrap();
-        } else if msg.content == "!hurlångkukharbolle" {
+        } else if msg.content == "!hurlångkukharaxelbolle" {
             let kuk_svar = match rand::thread_rng().gen_range(1..11) {
                 x => format!("Carl Vilhelm Alex Bolles kuk är {x} cm långsmal."),
             };
             msg.channel_id.say(&ctx, kuk_svar).await.unwrap();
-        } else if msg.content == "!hurlångkukharmikael" {
+        } else if msg.content == "!hurlångkukharmikaelösterdahl" {
             let kuk_svar = match rand::thread_rng().gen_range(1..11) {
-                _ => format!("Grisens kuk pekar inåt."),
+                10 => format!("Grisens kuk pekar inåt."),
+                x => format!("Mikael Österdahls kuk är {x} cm lång."),
             };
             msg.channel_id.say(&ctx, kuk_svar).await.unwrap();
-        } else if msg.content == "!hurlångkukharlinus" {
+        } else if msg.content == "!hurlångkukharlinusågren" {
             let kuk_svar = match rand::thread_rng().gen_range(1..11) {
-                _ => format!("Varför är du så jävla intresserad av kuklängd?."),
+                10 => format!("Varför är du så jävla intresserad av kuklängd?."),
+                x => format!("Linus Ågrens kuk är {x} cm lång."),
             };
             msg.channel_id.say(&ctx, kuk_svar).await.unwrap();
-        } else if msg.content == "!hurlångkukharerik" {
+        } else if msg.content == "!hurlångkukhareriksjöström" {
             let kuk_svar = match rand::thread_rng().gen_range(1..11) {
-                _ => format!("Större än din."),
+                10 => format!("Större än din."),
+                x => {
+                    let x = 10 + x;
+                    format!("Erik Sjöströms kuk är {x} cm lång.")
+                }
             };
             msg.channel_id.say(&ctx, kuk_svar).await.unwrap();
         // Admin messages - check for privilege, then execute and delete message
+        } else if msg.content == "!debug" {
+            if msg.author.name != "esjostrom" {
+                msg.channel_id
+                    .say(&ctx, "Du är ej betrodd med detta kommando")
+                    .await
+                    .unwrap();
+                return;
+            }
+            let channel_id = msg.channel_id.0;
+            let guild_id = msg.guild_id.unwrap().0;
+            let cup_leader = current_cup_leader(&self.database)
+                .await
+                .unwrap()
+                .get_nick(GUILD_ID.into(), &ctx.http)
+                .await
+                .unwrap();
+            let mut message = String::from("Debug info:\n");
+            writeln!(message, "Cup leader: {cup_leader}").unwrap();
+            msg.channel_id.say(&ctx, message).await.unwrap();
+            debug!("Channel id: {channel_id}, Guild id: {guild_id}");
         } else if msg.content == "!reset" {
             if msg.author.name != "esjostrom" {
                 msg.channel_id
@@ -644,16 +387,37 @@ impl EventHandler for Bot {
                 return;
             }
             self.read_old_messages(msg.channel_id, &ctx).await;
-        } else if msg.content == "!medaljera" {
-            if msg.author.name != "esjostrom" {
-                msg.channel_id
-                    .say(&ctx, "Du är ej betrodd med detta kommando")
-                    .await
-                    .unwrap();
-                return;
-            }
-            // set_medals(msg.channel_id, &self.database, &ctx).await;
         }
+    }
+}
+
+// Checks if we have entered a new cup season, if so prints of the winner of the last cup.
+async fn check_if_cup_winner(ctx: Context, database: Arc<Database>) {
+    debug!("Cup winner check loop spawned.");
+    // Run check every two hours
+    let mut interval = tokio::time::interval(Duration::from_secs(2 * 60 * 60));
+    let mut current_cup = current_cup_number();
+    let channel_id: ChannelId = CHANNEL_ID.into();
+    let guild_id: GuildId = GUILD_ID.into();
+    loop {
+        let cup = current_cup_number();
+        if current_cup != cup {
+            let message: String = match cup_leader(&current_cup, &database).await {
+                None => {
+                    error!("No leader in the current cup.");
+                    String::from("Ingen vinnare i denna cup.")
+                }
+                Some(player) => {
+                    let nick = player.get_nick(guild_id, &ctx.http).await.unwrap();
+                    format!("@here Grattis {nick} till vinsten av wordlecupen, du är fan bäst.")
+                }
+            };
+            channel_id.say(&ctx, message).await.unwrap();
+            info!("Cup winner announced");
+            current_cup = cup;
+        }
+        debug!("No new cup winner for cup {current_cup}.");
+        interval.tick().await;
     }
 }
 
@@ -683,7 +447,9 @@ async fn main() {
 
     let database = Database::new("database.sqlite").await;
 
-    let bot = Bot { database };
+    let bot = Bot {
+        database: Arc::new(database),
+    };
 
     let intents = GatewayIntents::GUILD_MESSAGES
         | GatewayIntents::DIRECT_MESSAGES
@@ -695,71 +461,5 @@ async fn main() {
     match client.start().await {
         Ok(_) => (),
         Err(e) => eprintln!("{e}"),
-    }
-}
-#[cfg(test)]
-mod tests {
-    use super::*;
-    #[test]
-    fn test_recalculate_scores() {
-        assert_eq!(
-            recalcualate_high_scores([None, None, None], 1),
-            [Some(1), None, None]
-        );
-
-        assert_eq!(
-            recalcualate_high_scores([Some(1), None, None], 1),
-            [Some(1), None, None]
-        );
-
-        assert_eq!(
-            recalcualate_high_scores([Some(2), None, None], 1),
-            [Some(1), Some(2), None]
-        );
-
-        assert_eq!(
-            recalcualate_high_scores([Some(1), None, None], 2),
-            [Some(1), Some(2), None]
-        );
-
-        assert_eq!(
-            recalcualate_high_scores([Some(2), Some(4), None], 6),
-            [Some(2), Some(4), Some(6)]
-        );
-
-        assert_eq!(
-            recalcualate_high_scores([Some(2), Some(4), None], 1),
-            [Some(1), Some(2), Some(4)]
-        );
-
-        assert_eq!(
-            recalcualate_high_scores([Some(2), Some(4), None], 3),
-            [Some(2), Some(3), Some(4)]
-        );
-
-        assert_eq!(
-            recalcualate_high_scores([Some(2), Some(4), None], 2),
-            [Some(2), Some(4), None]
-        );
-
-        assert_eq!(
-            recalcualate_high_scores([Some(2), Some(4), None], 4),
-            [Some(2), Some(4), None]
-        );
-
-        assert_eq!(
-            recalcualate_high_scores([Some(2), Some(4), Some(6)], 5),
-            [Some(2), Some(4), Some(5)]
-        );
-
-        assert_eq!(
-            recalcualate_high_scores([Some(2), Some(4), Some(6)], 6),
-            [Some(2), Some(4), Some(6)]
-        );
-
-        assert_eq!(
-            recalcualate_high_scores([Some(2), Some(4), Some(6)], 7),
-            [Some(2), Some(4), Some(6)]
-        );
     }
 }

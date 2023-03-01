@@ -8,6 +8,7 @@ CREATE TABLE score_sheet (
 	day INTEGER NOT NULL,
 	player_id INTEGER NOT NULL,
 	score INTEGER NOT NULL,
+	cup_number TEXT NOT NULL,
 	FOREIGN KEY(player_id) REFERENCES player(id),
 	FOREIGN KEY(day) REFERENCES daily(id),
 	UNIQUE(player_id, day)

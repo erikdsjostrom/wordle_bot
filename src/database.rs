@@ -3,7 +3,9 @@
                      // use sqlx::{QueryBuilder, Sqlite};
 
 // type Database = sqlx::Pool<sqlx::Sqlite>;
-use log::error;
+use log::{debug, error};
+
+use crate::utils::current_cup_number;
 
 pub struct Database {
     database: sqlx::SqlitePool,
@@ -71,12 +73,10 @@ impl Database {
         .fetch_all(&self.database)
         .await
         .unwrap();
-        dbg!(&medalist);
         let medalist: Vec<_> = medalist
             .iter()
             .map(|sheet| (sheet.player_id, sheet.msg_id, sheet.score))
             .collect();
-        dbg!(&medalist);
         if medalist.len() == 0 {
             None
         } else {
@@ -93,12 +93,10 @@ impl Database {
         .fetch_all(&self.database)
         .await
         .unwrap();
-        dbg!(&medalist);
         let medalist: Vec<_> = medalist
             .iter()
             .map(|sheet| (sheet.player_id, sheet.msg_id, sheet.score))
             .collect();
-        dbg!(&medalist);
         if medalist.len() == 0 {
             None
         } else {
@@ -115,12 +113,10 @@ impl Database {
             .fetch_all(&self.database)
             .await
             .unwrap();
-        dbg!(&medalist);
         let medalist: Vec<_> = medalist
             .iter()
             .map(|sheet| (sheet.player_id, sheet.msg_id, sheet.score))
             .collect();
-        dbg!(&medalist);
         if medalist.len() == 0 {
             None
         } else {
@@ -197,14 +193,22 @@ impl Database {
         .unwrap();
     }
 
-    pub async fn new_score_sheet(&self, msg_id: i64, day: i64, player_id: i64, score: i64) {
+    pub async fn new_score_sheet(
+        &self,
+        msg_id: i64,
+        day: i64,
+        player_id: i64,
+        score: i64,
+        cup_number: String,
+    ) {
         // Conflict = Cheater
         sqlx::query!(
-        "INSERT INTO score_sheet (msg_id, day, player_id, score) VALUES (?, ?, ?, ?) ON CONFLICT DO NOTHING",
+        "INSERT INTO score_sheet (msg_id, day, player_id, score, cup_number) VALUES (?, ?, ?, ?, ?) ON CONFLICT DO NOTHING",
         msg_id,
         day,
         player_id,
         score,
+        cup_number,
     )
     .execute(&self.database) // < Where the command will be executed
     .await
@@ -245,6 +249,26 @@ impl Database {
             "SELECT score FROM score_sheet WHERE player_id = ? AND day >= ?",
             player_id,
             from_day
+        )
+        .fetch_all(&self.database)
+        .await
+        .unwrap()
+        .iter()
+        .map(|score_sheet| score_sheet.score)
+        .collect()
+    }
+
+    pub async fn get_player_scores_for_current_cup(&self, player_id: i64) -> Vec<i64> {
+        let cup_number = current_cup_number();
+        self.get_player_scores_for_cup_number(player_id, &cup_number).await
+    }
+
+    pub async fn get_player_scores_for_cup_number(&self, player_id: i64, cup_number: &str) -> Vec<i64> {
+        debug!("Fetching score sheets for cup number {cup_number}");
+        sqlx::query!(
+            "SELECT score FROM score_sheet WHERE player_id = ? AND cup_number = ?",
+            player_id,
+            cup_number
         )
         .fetch_all(&self.database)
         .await
