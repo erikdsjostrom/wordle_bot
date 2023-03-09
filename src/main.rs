@@ -1,12 +1,13 @@
+mod bot;
 mod command;
 mod database;
 mod error;
 mod player;
 mod utils;
-mod bot;
 
 use bot::Bot;
 use database::Database;
+use player::Player;
 use serenity::model::prelude::command::Command;
 
 use std::fmt::Display;
@@ -25,7 +26,6 @@ use serenity::model::application::interaction::InteractionResponseType;
 use serenity::model::prelude::*;
 use serenity::prelude::*;
 
-use crate::command::score::cup_leader;
 use crate::utils::current_cup_number;
 
 // TODO: Make env vars
@@ -35,7 +35,6 @@ const GUILD_ID: u64 = 486522741395161108;
 struct Scoresheet {
     // TODO
 }
-
 
 #[derive(Debug, Hash, PartialEq, Eq, Copy, Clone)]
 pub enum Placement {
@@ -54,6 +53,37 @@ impl Display for Placement {
             Placement::Loser => f.write_str(":youtried:"),
         }
     }
+}
+
+// XXX
+async fn update_channel_title(
+    channel: &mut GuildChannel,
+    database: &Database,
+    ctx: &Context,
+) -> Result<()> {
+    let dagens_ledare = match database.get_gold_medalist(None).await? {
+        Some(medalists) => {
+            let players: Vec<Player> = medalists
+                .into_iter()
+                .map(|(player_id, _, _)| Player::from(player_id))
+                .collect();
+            let mut leaders: Vec<String> = Vec::default();
+            for player in players {
+                leaders.push(player.get_nick(channel.guild_id, ctx).await?);
+            }
+            leaders.join(", ")
+        }
+        None => "Tomten".to_string(),
+    };
+    let cup_ledare = match database.current_cup_leader().await? {
+        Some(player) => player.get_nick(channel.guild_id, ctx).await?,
+        None => "Tomten".to_string(),
+    };
+    let title = format!("Dagens ledare: {dagens_ledare}\tCupledare: {cup_ledare}");
+    channel
+        .edit(ctx, |c| c.topic(title))
+        .await
+        .map_err(|err| err.into())
 }
 
 #[async_trait]
@@ -83,7 +113,6 @@ impl EventHandler for Bot {
             })
             .await,
         ];
-        // .create_application_command(|command| command::kuk::register(command))
 
         debug!(
             "I now have the following global slash commands: {:#?}",
@@ -117,7 +146,6 @@ impl EventHandler for Bot {
                     )
                     .await
                 }
-                // "kuk" => command::kuk::run(&command.data.options).await,
                 _ => Err(Error::UnknownCommand),
             };
 
@@ -141,8 +169,16 @@ impl EventHandler for Bot {
 
     async fn message(&self, ctx: Context, msg: Message) {
         if msg.content.starts_with("Wordle") {
-            if let Err(err) = self.handle_wordle_message(msg, &ctx).await {
+            if let Err(err) = self.handle_wordle_message(&msg, &ctx).await {
                 exit(err);
+            }
+            if let Ok(channel) = msg.channel(&ctx).await {
+                if let Some(mut guild_channel) = channel.guild() {
+                    match update_channel_title(&mut guild_channel, &self.database, &ctx).await {
+                        Ok(_) => (),
+                        Err(e) => error!("{e}"),
+                    };
+                }
             }
         // Admin messages - check for privilege, then execute and delete message
         } else if msg.content == "!reset" {
@@ -174,7 +210,7 @@ async fn check_for_cup_winner(ctx: Context, database: Arc<Database>) {
     loop {
         let cup = current_cup_number();
         if current_cup != cup {
-            let message: String = match cup_leader(&current_cup, &database).await {
+            let message: String = match database.cup_leader(&current_cup).await {
                 Err(err) => exit(err),
                 Ok(None) => {
                     error!("No leader in the current cup.");

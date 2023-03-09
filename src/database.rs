@@ -1,7 +1,11 @@
+use std::future::Future;
+
 use log::debug;
 
+use crate::command::score::FIB;
 use crate::error::Result;
-use crate::utils::current_cup_number;
+use crate::player::Player;
+use crate::utils::{self, current_cup_number};
 
 pub struct Database {
     database: sqlx::SqlitePool,
@@ -23,27 +27,6 @@ impl Database {
         Ok(Self { database })
     }
 
-    async fn get_scores(&self, day: Option<i64>) -> Result<Vec<(i64, (i64, i64))>> {
-        let res = if let Some(day) = day {
-            sqlx::query!(
-            "SELECT player_id, msg_id, score FROM score_sheet where day = ? ORDER BY score DESC",
-            day
-        )
-            .fetch_all(&self.database)
-            .await?
-            .iter()
-            .map(|x| (x.score, (x.msg_id, x.player_id)))
-            .collect()
-        } else {
-            sqlx::query!("SELECT msg_id, player_id, score FROM score_sheet where day = (SELECT max(day) from score_sheet) ORDER BY score DESC")
-    .fetch_all(&self.database)
-    .await?
-        .iter()
-        .map(|x| (x.score, (x.msg_id, x.player_id)))
-        .collect()
-        };
-        Ok(res)
-    }
 
     pub async fn get_daily_day(&self) -> Result<i64> {
         sqlx::query!("SELECT max(id) as id from daily")
@@ -267,5 +250,63 @@ impl Database {
         .await
         .map(|row| row.iter().map(|score_sheet| score_sheet.score).collect())
         .map_err(|err| err.into())
+    }
+
+    // Calculate the current score of all players
+    // The wordle scores are used as indexes into the fibonachi sequence
+    // to lend more weight to earlier correct guesses
+    // TODO: Factor out database to make it testable
+    async fn calculate_leader_board<F, Fut>(&self, score_getter: F) -> Result<Vec<(Player, u32)>>
+    where
+        F: Fn(i64) -> Fut,
+        Fut: Future<Output = Result<Vec<i64>>>,
+    {
+        debug!("Calculating leader board");
+        let mut fetched: usize = 0;
+        let mut leader_board: Vec<(Player, u32)> = vec![];
+        let players = self.get_players().await?;
+        for player_id in players {
+            let scores = score_getter(player_id).await?;
+            fetched += scores.len();
+            let score = scores.iter().fold(0, |acc, elem| acc + FIB[*elem as usize]);
+            if score == 0 {
+                continue;
+            }
+            leader_board.push((Player::from(player_id), score));
+        }
+        debug!("Fetched {fetched} score sheets.");
+        // XXX
+        leader_board.sort_by_key(|x| x.1);
+        leader_board.reverse();
+        Ok(leader_board)
+    }
+
+    pub async fn total_cup_score(&self) -> Result<Vec<(Player, u32)>> {
+        let score_getter =
+            |player_id| async move { self.get_player_scores_from_day(0, player_id).await };
+        self.calculate_leader_board(score_getter).await
+    }
+
+    pub async fn current_cup_score(&self) -> Result<Vec<(Player, u32)>> {
+        let score_getter =
+            |player_id| async move { self.get_player_scores_for_current_cup(player_id).await };
+        self.calculate_leader_board(score_getter).await
+    }
+
+    pub async fn cup_leader(&self, cup_number: &str) -> Result<Option<Player>> {
+        let score_getter = |player_id| async move {
+            self.get_player_scores_for_cup_number(player_id, cup_number)
+                .await
+        };
+        Ok(self
+            .calculate_leader_board(score_getter)
+            .await?
+            .first()
+            .map(|x| x.0))
+    }
+
+    pub async fn current_cup_leader(&self) -> Result<Option<Player>> {
+        let current_cup = utils::current_cup_number();
+        self.cup_leader(&current_cup).await
     }
 }

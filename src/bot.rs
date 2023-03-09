@@ -129,7 +129,7 @@ impl Bot {
             .await
     }
 
-    pub(crate) async fn handle_wordle_message(&self, msg: Message, ctx: &Context) -> Result<()> {
+    pub(crate) async fn handle_wordle_message(&self, msg: &Message, ctx: &Context) -> Result<()> {
         let score_sheet = msg.content.strip_prefix("Wordle").unwrap();
         let (day, _) = parse_wordle_msg(score_sheet).unwrap();
         self.clear_medals(day, msg.channel_id, &ctx).await?;
