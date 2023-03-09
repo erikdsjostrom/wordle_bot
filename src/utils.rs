@@ -8,7 +8,7 @@ use chrono::Datelike;
 use chrono::Utc;
 
 use crate::Result;
-use crate::WordleError;
+use crate::error::Error;
 
 pub fn cup_number_from_unixtime(unixtime: i64) -> String {
     // Creates a new SystemTime from the specified number of whole seconds
@@ -76,7 +76,7 @@ pub(crate) fn parse_wordle_msg(msg: &str) -> Result<(i64, i64)> {
     let wordle_number: i64 = match msg.next() {
         Some(it) => it,
         None => {
-            return Err(WordleError::ParseError(
+            return Err(Error::ParseError(
                 "Wordle number not found while parsing.".to_string(),
             ))
         }
@@ -84,12 +84,12 @@ pub(crate) fn parse_wordle_msg(msg: &str) -> Result<(i64, i64)> {
     .parse()?;
     let score: i64 = match msg
         .next()
-        .ok_or(WordleError::ParseError(String::from(
+        .ok_or(Error::ParseError(String::from(
             "Wordle message does not contain a score.",
         )))?
         .chars()
         .next()
-        .ok_or(WordleError::ParseError(String::from(
+        .ok_or(Error::ParseError(String::from(
             "Unable to split score into chars.",
         )))? {
         'X' => 0, // Ok, since there's no 0 guess score
@@ -99,7 +99,7 @@ pub(crate) fn parse_wordle_msg(msg: &str) -> Result<(i64, i64)> {
         '4' => 4,
         '5' => 5,
         '6' => 6,
-        x => return Err(WordleError::IlleagalNumberOfGuesses(x)),
+        x => return Err(Error::IlleagalNumberOfGuesses(x)),
     };
     Ok((wordle_number, score))
 }

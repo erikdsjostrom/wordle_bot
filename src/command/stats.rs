@@ -1,17 +1,21 @@
 use std::{collections::HashMap, fmt::Write};
 
-use crate::{database::Database, Placement};
+use serenity::builder::CreateApplicationCommand;
+use serenity::model::prelude::interaction::application_command::CommandDataOption;
+
+use crate::player::Player;
+use crate::{database::Database, Placement, error::Result};
 
 // Collects, calculates and presents various statistics
 // for a given player.
-pub async fn stats(user_id: i64, database: &Database) -> String {
+pub async fn run(player: &Player, database: &Database, _options: &[CommandDataOption]) -> Result<String> {
     let mut response: String = String::from("");
-    let gold_medals = database.get_user_gold_medals(user_id).await;
-    let silver_medals = database.get_user_silver_medals(user_id).await;
-    let bronze_medals = database.get_user_bronze_medals(user_id).await;
-    let played_games = database.get_user_played_games(user_id).await;
+    let gold_medals = database.get_user_gold_medals(player.id as i64).await?;
+    let silver_medals = database.get_user_silver_medals(player.id as i64).await?;
+    let bronze_medals = database.get_user_bronze_medals(player.id as i64).await?;
+    let played_games = database.get_user_played_games(player.id as i64).await?;
 
-    writeln!(response, "Antal spelade spel: **{}**", played_games).unwrap();
+    writeln!(response, "Antal spelade spel: **{}**", played_games)?;
     for (p, m) in [
         (Placement::Gold.to_string(), gold_medals),
         (Placement::Silver.to_string(), silver_medals),
@@ -21,7 +25,7 @@ pub async fn stats(user_id: i64, database: &Database) -> String {
     }
     writeln!(response, "").unwrap();
 
-    let scores = database.get_user_scores(user_id).await;
+    let scores = database.get_user_scores(player.id as i64).await;
     let total: f64 = scores.len() as f64;
     let mut score_count: HashMap<i64, f64> = HashMap::from([
         (0, 0.0),
@@ -35,7 +39,7 @@ pub async fn stats(user_id: i64, database: &Database) -> String {
     for score in scores {
         *score_count.get_mut(&score).unwrap() += 1.0;
     }
-    writeln!(response, "Poängfördelning:").unwrap();
+    writeln!(response, "Poängfördelning:")?;
     for score in [0, 1, 2, 3, 4, 5, 6] {
         let ratio = 50.0 * score_count[&score] / total;
         writeln!(
@@ -44,9 +48,14 @@ pub async fn stats(user_id: i64, database: &Database) -> String {
             score.to_string(),
             "█".repeat(ratio as usize),
             score_count[&score]
-        )
-        .unwrap();
+        )?
     }
 
-    response
+    Ok(response)
+}
+
+pub fn register(command: &mut CreateApplicationCommand) -> &mut CreateApplicationCommand {
+    command
+        .name("stats")
+        .description("Lite statistik om en spelare.")
 }
