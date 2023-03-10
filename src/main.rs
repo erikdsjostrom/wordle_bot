@@ -83,7 +83,7 @@ impl EventHandler for Bot {
     async fn ready(&self, ctx: Context, ready: Ready) {
         debug!("{} is connected!", ready.user.name);
 
-        let guild_id = GuildId(
+        let _guild_id = GuildId(
             std::env::var("GUILD_ID")
                 .expect("Expected GUILD_ID in environment")
                 .parse()
