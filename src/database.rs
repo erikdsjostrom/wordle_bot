@@ -5,9 +5,10 @@ use log::debug;
 use crate::command::score::FIB;
 use crate::error::Result;
 use crate::player::Player;
+use crate::scoresheet::Scoresheet;
 use crate::utils::{self, current_cup_number};
 
-pub struct Database {
+pub(crate) struct Database {
     database: sqlx::SqlitePool,
 }
 
@@ -27,7 +28,6 @@ impl Database {
         Ok(Self { database })
     }
 
-
     pub async fn get_daily_day(&self) -> Result<i64> {
         sqlx::query!("SELECT max(id) as id from daily")
             .fetch_one(&self.database)
@@ -36,61 +36,41 @@ impl Database {
             .map_err(|err| err.into())
     }
 
-    pub async fn get_silver_medalist(
-        &self,
-        day: Option<i64>,
-    ) -> Result<Option<Vec<(i64, i64, i64)>>> {
+    pub async fn get_gold_medalist(&self, day: Option<i64>) -> Result<Option<Vec<Scoresheet>>> {
         let day = match day {
             Some(day) => day,
             None => self.get_daily_day().await?,
         };
-        let medalist: Vec<_> = sqlx::query!("SELECT * from score_sheet WHERE day = ? AND score = (SELECT silver from daily where id = ?)", day, day)
-        .fetch_all(&self.database)
-        .await?;
-        let medalist: Vec<_> = medalist
-            .iter()
-            .map(|sheet| (sheet.player_id, sheet.msg_id, sheet.score))
-            .collect();
-        Ok(match medalist.is_empty() {
-            true => None,
-            false => Some(medalist),
-        })
-    }
-    pub async fn get_bronze_medalist(
-        &self,
-        day: Option<i64>,
-    ) -> Result<Option<Vec<(i64, i64, i64)>>> {
-        let day = match day {
-            Some(day) => day,
-            None => self.get_daily_day().await?,
-        };
-        let medalist: Vec<_> = sqlx::query!("SELECT * from score_sheet WHERE day = ? AND score = (SELECT bronze from daily where id = ?)", day, day)
-        .fetch_all(&self.database)
-        .await?;
-        let medalist: Vec<_> = medalist
-            .iter()
-            .map(|sheet| (sheet.player_id, sheet.msg_id, sheet.score))
-            .collect();
-        Ok(match medalist.is_empty() {
-            true => None,
-            false => Some(medalist),
-        })
-    }
-    pub async fn get_gold_medalist(
-        &self,
-        day: Option<i64>,
-    ) -> Result<Option<Vec<(i64, i64, i64)>>> {
-        let day = match day {
-            Some(day) => day,
-            None => self.get_daily_day().await?,
-        };
-        let medalist: Vec<_> = sqlx::query!("SELECT * from score_sheet WHERE day = ? AND score = (SELECT gold from daily where id = ?)", day, day)
+        let medalist: Vec<Scoresheet> = sqlx::query_as!(Scoresheet, "SELECT * from score_sheet WHERE day = ? AND score = (SELECT gold from daily where id = ?)", day, day)
             .fetch_all(&self.database)
             .await?;
-        let medalist: Vec<_> = medalist
-            .iter()
-            .map(|sheet| (sheet.player_id, sheet.msg_id, sheet.score))
-            .collect();
+        Ok(match medalist.is_empty() {
+            true => None,
+            false => Some(medalist),
+        })
+    }
+
+    pub async fn get_silver_medalist(&self, day: Option<i64>) -> Result<Option<Vec<Scoresheet>>> {
+        let day = match day {
+            Some(day) => day,
+            None => self.get_daily_day().await?,
+        };
+        let medalist: Vec<_> = sqlx::query_as!(Scoresheet, "SELECT * from score_sheet WHERE day = ? AND score = (SELECT silver from daily where id = ?)", day, day)
+        .fetch_all(&self.database)
+        .await?;
+        Ok(match medalist.is_empty() {
+            true => None,
+            false => Some(medalist),
+        })
+    }
+    pub async fn get_bronze_medalist(&self, day: Option<i64>) -> Result<Option<Vec<Scoresheet>>> {
+        let day = match day {
+            Some(day) => day,
+            None => self.get_daily_day().await?,
+        };
+        let medalist: Vec<_> = sqlx::query_as!(Scoresheet, "SELECT * from score_sheet WHERE day = ? AND score = (SELECT bronze from daily where id = ?)", day, day)
+        .fetch_all(&self.database)
+        .await?;
         Ok(match medalist.is_empty() {
             true => None,
             false => Some(medalist),

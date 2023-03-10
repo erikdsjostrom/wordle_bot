@@ -8,7 +8,7 @@ use crate::{database::Database, Placement, error::Result};
 
 // Collects, calculates and presents various statistics
 // for a given player.
-pub async fn run(player: &Player, database: &Database, _options: &[CommandDataOption]) -> Result<String> {
+pub(crate) async fn run(player: &Player, database: &Database, _options: &[CommandDataOption]) -> Result<String> {
     let mut response: String = String::from("");
     let gold_medals = database.get_user_gold_medals(player.id as i64).await?;
     let silver_medals = database.get_user_silver_medals(player.id as i64).await?;

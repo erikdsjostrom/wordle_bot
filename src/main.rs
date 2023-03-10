@@ -3,11 +3,11 @@ mod command;
 mod database;
 mod error;
 mod player;
+mod scoresheet;
 mod utils;
 
 use bot::Bot;
 use database::Database;
-use player::Player;
 use serenity::model::prelude::command::Command;
 
 use std::fmt::Display;
@@ -31,10 +31,6 @@ use crate::utils::current_cup_number;
 // TODO: Make env vars
 const CHANNEL_ID: u64 = 938727764037619712;
 const GUILD_ID: u64 = 486522741395161108;
-
-struct Scoresheet {
-    // TODO
-}
 
 #[derive(Debug, Hash, PartialEq, Eq, Copy, Clone)]
 pub enum Placement {
@@ -62,14 +58,10 @@ async fn update_channel_title(
     ctx: &Context,
 ) -> Result<()> {
     let dagens_ledare = match database.get_gold_medalist(None).await? {
-        Some(medalists) => {
-            let players: Vec<Player> = medalists
-                .into_iter()
-                .map(|(player_id, _, _)| Player::from(player_id))
-                .collect();
+        Some(players) => {
             let mut leaders: Vec<String> = Vec::default();
             for player in players {
-                leaders.push(player.get_nick(channel.guild_id, ctx).await?);
+                leaders.push(player.player().get_nick(channel.guild_id, ctx).await?);
             }
             leaders.join(", ")
         }

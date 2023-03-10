@@ -1,6 +1,6 @@
 use log::{debug, error, info};
 use serenity::futures::StreamExt;
-use serenity::model::prelude::{ChannelId, Message, MessageId, ReactionType};
+use serenity::model::prelude::{ChannelId, Message, ReactionType};
 use serenity::prelude::Context;
 
 use crate::database::Database;
@@ -14,7 +14,12 @@ pub(crate) struct Bot {
 }
 
 impl Bot {
-    pub(crate) async fn set_medals(&self, day: i64, channel_id: ChannelId, http: &Context) -> Result<()> {
+    pub(crate) async fn set_medals(
+        &self,
+        day: i64,
+        channel_id: ChannelId,
+        http: &Context,
+    ) -> Result<()> {
         // playerId, msgId, score
         for (p, medalists) in [
             (
@@ -30,14 +35,14 @@ impl Bot {
                 self.database.get_bronze_medalist(Some(day)).await?,
             ),
         ] {
-            if medalists.is_none() {
-                continue;
-            }
-            let medalists = medalists.unwrap();
-            for (_, msg_id, _) in medalists {
-                let msg_id = MessageId(msg_id as u64);
+            let Some(medalists) = medalists else {continue;};
+            for medalist in medalists {
                 channel_id
-                    .create_reaction(http, msg_id, ReactionType::Unicode(p.to_string()))
+                    .create_reaction(
+                        http,
+                        medalist.message_id(),
+                        ReactionType::Unicode(p.to_string()),
+                    )
                     .await?;
             }
         }
@@ -45,7 +50,6 @@ impl Bot {
     }
 
     async fn clear_medals(&self, day: i64, channel_id: ChannelId, http: &Context) -> Result<()> {
-        // playerId, msgId, score
         for (p, medalists) in [
             (
                 Placement::Gold,
@@ -60,14 +64,15 @@ impl Bot {
                 self.database.get_bronze_medalist(Some(day)).await?,
             ),
         ] {
-            if medalists.is_none() {
-                continue;
-            }
-            let medalists = medalists.unwrap();
-            for (_, msg_id, _) in medalists {
-                let msg_id = MessageId(msg_id as u64);
+            let Some(medalists) = medalists else {continue;};
+            for medalist in medalists {
                 channel_id
-                    .delete_reaction(http, msg_id, None, ReactionType::Unicode(p.to_string()))
+                    .delete_reaction(
+                        http,
+                        medalist.message_id(),
+                        None,
+                        ReactionType::Unicode(p.to_string()),
+                    )
                     .await?;
             }
         }

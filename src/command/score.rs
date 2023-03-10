@@ -12,7 +12,7 @@ use crate::{
 // Failure (X) gives a score of zero
 pub const FIB: [u32; 7] = [0, 13, 8, 5, 3, 2, 1];
 
-pub async fn run(
+pub(crate) async fn run(
     database: &Database,
     ctx: &Context,
     _options: &[CommandDataOption],
