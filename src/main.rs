@@ -5,6 +5,7 @@ mod error;
 mod player;
 mod scoresheet;
 mod utils;
+mod parser;
 
 use bot::Bot;
 use database::Database;

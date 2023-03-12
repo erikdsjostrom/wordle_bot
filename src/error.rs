@@ -11,7 +11,6 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[derive(Debug)]
 pub enum Error {
     Message(String),
-    IlleagalNumberOfGuesses(char),
     ParseError(String),
     DatabaseError(DbError),
     DatabaseMigrationError(MigrateError),
@@ -42,9 +41,6 @@ impl Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Error::Message(msg) => formatter.write_str(msg),
-            Error::IlleagalNumberOfGuesses(x) => {
-                formatter.write_fmt(format_args!("Illeagal number of guesses: {x}"))
-            }
             Error::ParseError(err) => formatter.write_str(&err),
             Error::DatabaseError(err) => formatter.write_str(&err.to_string()),
             Error::DatabaseMigrationError(err) => formatter.write_str(&err.to_string()),

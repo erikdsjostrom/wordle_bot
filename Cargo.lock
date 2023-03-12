@@ -2314,6 +2314,7 @@ dependencies = [
  "dotenv",
  "env_logger",
  "log",
+ "nom",
  "rand",
  "serenity",
  "sqlx",

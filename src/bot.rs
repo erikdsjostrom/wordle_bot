@@ -4,9 +4,9 @@ use serenity::model::prelude::{ChannelId, Message, ReactionType};
 use serenity::prelude::Context;
 
 use crate::database::Database;
-use crate::error::{Error, Result};
-use crate::utils::{cup_number_from_unixtime, parse_wordle_msg, recalcualate_high_scores};
-use crate::Placement;
+use crate::error::Result;
+use crate::utils::{cup_number_from_unixtime, recalcualate_high_scores};
+use crate::{parser, Placement};
 use std::sync::Arc;
 
 pub(crate) struct Bot {
@@ -82,16 +82,9 @@ impl Bot {
         let cup_number = cup_number_from_unixtime(msg.timestamp.unix_timestamp());
         let player_id = msg.author.id.0 as i64;
         let msg_id = msg.id.0 as i64;
-        let score_sheet = msg
-            .content
-            .strip_prefix("Wordle")
-            .ok_or(Error::Message(format!(
-                "new_score_sheet called with a non wordle msg: {}",
-                msg.content
-            )))?;
+        let (day, score) = parser::parse_msg(&msg.content)?;
         // Create new player if not exists
         self.database.new_player(player_id).await?;
-        let (day, score) = parse_wordle_msg(score_sheet)?;
         // TODO: Is there a better place to do this to avoid runtime error if this is not executed first?
         self.database.new_daily(day).await?;
         debug!("Day: {}, Score: {}, Cup number: {}", day, score, cup_number);
@@ -135,8 +128,7 @@ impl Bot {
     }
 
     pub(crate) async fn handle_wordle_message(&self, msg: &Message, ctx: &Context) -> Result<()> {
-        let score_sheet = msg.content.strip_prefix("Wordle").unwrap();
-        let (day, _) = parse_wordle_msg(score_sheet).unwrap();
+        let (day, _) = parser::parse_msg(&msg.content)?;
         self.clear_medals(day, msg.channel_id, &ctx).await?;
         self.new_score_sheet(&msg).await?;
         self.set_medals(day, msg.channel_id, &ctx).await?;
