@@ -32,7 +32,7 @@ pub(crate) async fn run(
         }
         let line = format!(
             "{} - {} - {} försök ({}p)",
-            placement.to_string(),
+            placement,
             users.join(", "),
             score,
             FIB[score as usize]

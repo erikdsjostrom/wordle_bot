@@ -1,8 +1,8 @@
 use log::debug;
+use serenity::builder::CreateApplicationCommand;
 use serenity::model::prelude::interaction::application_command::CommandDataOption;
 use serenity::prelude::*;
 use serenity::utils::MessageBuilder;
-use serenity::{builder::CreateApplicationCommand};
 
 use crate::{database::Database, error::Result, utils::current_cup_number_cute_format, GUILD_ID};
 
@@ -34,7 +34,7 @@ pub(crate) async fn run(
     let mut response = MessageBuilder::new();
     let score = if false {
         // totala
-        response.push_bold_line(format!("Ställning i totalcupen:"));
+        response.push_bold_line("Ställning i totalcupen:");
         database.total_cup_score().await?
     } else {
         let cup_number = current_cup_number_cute_format();

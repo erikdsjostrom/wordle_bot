@@ -2,7 +2,6 @@ use std::cmp::Ordering;
 use std::time::Duration;
 use std::time::UNIX_EPOCH;
 
-use chrono;
 use chrono::DateTime;
 use chrono::Datelike;
 use chrono::Utc;
@@ -22,11 +21,7 @@ pub fn current_cup_number() -> String {
 
 pub fn current_cup_number_cute_format() -> String {
     let current_date = chrono::Utc::now().date_naive();
-    format!(
-        "{}/{}",
-        current_date.year().to_string(),
-        current_date.month().to_string()
-    )
+    format!("{}/{}", current_date.year(), current_date.month())
 }
 
 // Upserts a new potential high-score into a sorted list of high-scores of length three

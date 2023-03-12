@@ -1,7 +1,6 @@
 use serenity::Error as SerenityError;
 use sqlx::migrate::MigrateError;
 use sqlx::Error as DbError;
-use std;
 use std::fmt::Error as FmtError;
 use std::fmt::{self, Display};
 use std::num::ParseIntError;
@@ -41,7 +40,7 @@ impl Display for Error {
     fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Error::Message(msg) => formatter.write_str(msg),
-            Error::ParseError(err) => formatter.write_str(&err),
+            Error::ParseError(err) => formatter.write_str(err),
             Error::DatabaseError(err) => formatter.write_str(&err.to_string()),
             Error::DatabaseMigrationError(err) => formatter.write_str(&err.to_string()),
             Error::SerenityError(err) => formatter.write_str(&err.to_string()),

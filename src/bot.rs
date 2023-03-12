@@ -108,7 +108,7 @@ impl Bot {
                 Ok(msg) => msg,
             };
             if msg.content.starts_with("Wordle") {
-                msg_count = msg_count + 1;
+                msg_count += 1;
                 _ = self.new_score_sheet(&msg).await;
             }
         }
@@ -129,9 +129,9 @@ impl Bot {
 
     pub(crate) async fn handle_wordle_message(&self, msg: &Message, ctx: &Context) -> Result<()> {
         let (day, _) = parser::parse_msg(&msg.content)?;
-        self.clear_medals(day, msg.channel_id, &ctx).await?;
-        self.new_score_sheet(&msg).await?;
-        self.set_medals(day, msg.channel_id, &ctx).await?;
+        self.clear_medals(day, msg.channel_id, ctx).await?;
+        self.new_score_sheet(msg).await?;
+        self.set_medals(day, msg.channel_id, ctx).await?;
         Ok(())
     }
 }

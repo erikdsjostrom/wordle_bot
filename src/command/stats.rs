@@ -1,29 +1,34 @@
-use std::{collections::HashMap, fmt::Write};
+use std::collections::HashMap;
 
 use serenity::builder::CreateApplicationCommand;
 use serenity::model::prelude::interaction::application_command::CommandDataOption;
+use serenity::utils::MessageBuilder;
 
 use crate::player::Player;
-use crate::{database::Database, Placement, error::Result};
+use crate::{database::Database, error::Result, Placement};
 
 // Collects, calculates and presents various statistics
 // for a given player.
-pub(crate) async fn run(player: &Player, database: &Database, _options: &[CommandDataOption]) -> Result<String> {
-    let mut response: String = String::from("");
+pub(crate) async fn run(
+    player: &Player,
+    database: &Database,
+    _options: &[CommandDataOption],
+) -> Result<String> {
+    let mut response = MessageBuilder::new();
     let gold_medals = database.get_user_gold_medals(player.id as i64).await?;
     let silver_medals = database.get_user_silver_medals(player.id as i64).await?;
     let bronze_medals = database.get_user_bronze_medals(player.id as i64).await?;
     let played_games = database.get_user_played_games(player.id as i64).await?;
 
-    writeln!(response, "Antal spelade spel: **{}**", played_games)?;
+    response.push_line(format!("Antal spelade spel: **{}**", played_games));
     for (p, m) in [
         (Placement::Gold.to_string(), gold_medals),
         (Placement::Silver.to_string(), silver_medals),
         (Placement::Bronze.to_string(), bronze_medals),
     ] {
-        writeln!(response, "{p} medaljer: **{m}**",).unwrap();
+        response.push_line(format!("{p} medaljer: **{m}**"));
     }
-    writeln!(response, "").unwrap();
+    response.push_line("");
 
     let scores = database.get_user_scores(player.id as i64).await;
     let total: f64 = scores.len() as f64;
@@ -39,19 +44,18 @@ pub(crate) async fn run(player: &Player, database: &Database, _options: &[Comman
     for score in scores {
         *score_count.get_mut(&score).unwrap() += 1.0;
     }
-    writeln!(response, "Poängfördelning:")?;
+    response.push_bold_line("Gissningsfördelning:");
     for score in [0, 1, 2, 3, 4, 5, 6] {
         let ratio = 50.0 * score_count[&score] / total;
-        writeln!(
-            response,
+        response.push_line(format!(
             "{}\t|\t{}|\t{}",
-            score.to_string(),
+            score,
             "█".repeat(ratio as usize),
             score_count[&score]
-        )?
+        ));
     }
 
-    Ok(response)
+    Ok(response.build())
 }
 
 pub fn register(command: &mut CreateApplicationCommand) -> &mut CreateApplicationCommand {
