@@ -1,5 +1,6 @@
 use log::debug;
-use serenity::builder::CreateApplicationCommand;
+use serenity::model::prelude::command::CommandOptionType;
+use serenity::{builder::CreateApplicationCommand, model::prelude::interaction::application_command::CommandDataOptionValue};
 use serenity::model::prelude::interaction::application_command::CommandDataOption;
 use serenity::prelude::*;
 use serenity::utils::MessageBuilder;
@@ -12,30 +13,26 @@ pub const FIB: [u32; 7] = [0, 13, 8, 5, 3, 2, 1];
 pub(crate) async fn run(
     database: &Database,
     ctx: &Context,
-    _options: &[CommandDataOption],
+    options: &[CommandDataOption],
 ) -> Result<String> {
-    debug!("{:?}", _options);
-    // let totala: bool = {
-    //     if let Some(opt) = options.get(0) {
-    //         if let Some(opt) = opt.resolved.as_ref() {
-    //             if let CommandDataOptionValue::Boolean(total) = opt {
-    //                 *total
-    //             } else {
-    //                 false
-    //             }
-    //         } else {
-    //             false
-    //         }
-    //     } else {
-    //         false
-    //     }
-    // };
-    // debug!("Totala: {totala}");
+    debug!("{:?}", options);
+    // XXX
+    let totala: bool = {
+        if let Some(opt) = options.get(0) {
+            if let Some(CommandDataOptionValue::Boolean(total)) = opt.resolved.as_ref() {
+                    *total
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    };
+    debug!("Totala: {totala}");
     let mut response = MessageBuilder::new();
-    let score = if false {
-        // totala
+    let score = if totala {
         response.push_bold_line("Ställning i totalcupen:");
-        database.total_cup_score().await?
+        database.total().await?.iter().map(|(k, v)| (*k,*v)).collect()
     } else {
         let cup_number = current_cup_number_cute_format();
         response.push_bold_line(format!("Ställning i månadscupen {cup_number}:"));
@@ -46,18 +43,20 @@ pub(crate) async fn run(
         let user = player.get_nick(GUILD_ID.into(), &ctx.http).await?;
         response.push_line(format!("\t\t{result}: {user}"));
     }
-    Ok(response.build())
+    let response = response.build();
+    dbg!("Sending response");
+    Ok(response)
 }
 
 pub fn register(command: &mut CreateApplicationCommand) -> &mut CreateApplicationCommand {
     command
         .name("ställning")
         .description("Nuvarande ställning i månadscupen.")
-    // .create_option(|option| {
-    //     option
-    //         .name("totala")
-    //         .description("ställning i totalcupen.")
-    //         .kind(CommandOptionType::Boolean)
-    //         .required(false)
-    // })
+    .create_option(|option| {
+        option
+            .name("totala")
+            .description("ställning i totalcupen.")
+            .kind(CommandOptionType::Boolean)
+            .required(false)
+    })
 }

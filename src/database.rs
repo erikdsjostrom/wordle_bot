@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::future::Future;
 
 use log::debug;
@@ -193,22 +194,6 @@ impl Database {
         Ok(res)
     }
 
-    pub async fn get_player_scores_from_day(
-        &self,
-        from_day: i64,
-        player_id: i64,
-    ) -> Result<Vec<i64>> {
-        sqlx::query!(
-            "SELECT score FROM score_sheet WHERE player_id = ? AND day >= ?",
-            player_id,
-            from_day
-        )
-        .fetch_all(&self.database)
-        .await
-        .map(|row| row.iter().map(|score_sheet| score_sheet.score).collect())
-        .map_err(|err| err.into())
-    }
-
     pub async fn get_player_scores_for_current_cup(&self, player_id: i64) -> Result<Vec<i64>> {
         let cup_number = current_cup_number();
         self.get_player_scores_for_cup_number(player_id, &cup_number)
@@ -261,10 +246,21 @@ impl Database {
         Ok(leader_board)
     }
 
-    pub async fn total_cup_score(&self) -> Result<Vec<(Player, u32)>> {
-        let score_getter =
-            |player_id| async move { self.get_player_scores_from_day(0, player_id).await };
-        self.calculate_leader_board(score_getter).await
+    pub(crate) async fn total(&self) -> Result<HashMap<Player, u32>> {
+        let rows = sqlx::query!("SELECT player_id, score FROM score_sheet ORDER BY player_id")
+            .fetch_all(&self.database)
+            .await?;
+        let mut result: HashMap<Player, u32> = HashMap::new();
+        for (player, score) in rows
+            .iter()
+            .map(|row| (Player::from(row.player_id), row.score))
+        {
+            result
+                .entry(player)
+                .and_modify(|total_score| *total_score += FIB[score as usize])
+                .or_insert(FIB[score as usize]);
+        }
+        Ok(result)
     }
 
     pub async fn current_cup_score(&self) -> Result<Vec<(Player, u32)>> {

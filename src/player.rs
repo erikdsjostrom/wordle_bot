@@ -4,7 +4,7 @@ use serenity::{
     model::prelude::{GuildId, UserId},
 };
 
-#[derive(Copy, Clone, Debug)]
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
 pub struct Player {
     pub id: u64,
 }
