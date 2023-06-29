@@ -2,36 +2,45 @@ mod bot;
 mod command;
 mod database;
 mod error;
+mod parser;
 mod player;
 mod scoresheet;
 mod utils;
-mod parser;
+
+use std::{fmt::Display, sync::Arc, time::Duration};
 
 use bot::Bot;
 use database::Database;
-use serenity::model::prelude::command::Command;
-
-use std::fmt::Display;
-use std::sync::Arc;
-use std::time::Duration;
-
 use dotenv::dotenv;
-use log::{debug, error, info};
-
 use error::{Error, Result};
-
-use serenity::async_trait;
-
-use serenity::model::application::interaction::Interaction;
-use serenity::model::application::interaction::InteractionResponseType;
-use serenity::model::prelude::*;
-use serenity::prelude::*;
+use log::{debug, error, info};
+use rand::seq::IteratorRandom;
+use serenity::{
+    async_trait,
+    model::{
+        application::interaction::{Interaction, InteractionResponseType},
+        prelude::{command::Command, *},
+    },
+    prelude::*,
+};
 
 use crate::utils::current_cup_number;
 
 // TODO: Make env vars
 const CHANNEL_ID: u64 = 938727764037619712;
 const GUILD_ID: u64 = 486522741395161108;
+const CONGRATULATIONS: [&str; 10] = [
+        "@here Grattis {nick} till segern i wordlecupen, du är verkligen bäst!",
+        "@here Stort grattis till {nick} som vann wordlecupen, du är en riktig mästare!",
+        "@here Wow! Grattis {nick} till att ha erövrat wordlecupen, du är grym!",
+        "@here Fantastiskt jobbat, {nick}! Du är en vinnare och tar hem wordlecupen med bravur!",
+        "@here Grattis, {nick}! Du har lyckats bli mästaren i wordlecupen, en värdig vinnare!",
+        "@here Stort grattis till {nick} för att ha vunnit wordlecupen, du är en riktig mästare!",
+        "@here Fantastiskt jobbat, {nick}! Du har tagit hem segern i wordlecupen, du är grymt bra!",
+        "@here Grattis, {nick}! Ditt framstående spel har belönats med vinsten i wordlecupen, du är verkligen bäst!",
+        "@here Wow! {nick}, du är en riktig vinnare som har erövrat wordlecupen. Stort grattis!",
+        "@here Enorma gratulationer till {nick} för att ha segrat i wordlecupen. Du är en otroligt skicklig spelare!"
+    ];
 
 #[derive(Debug, Hash, PartialEq, Eq, Copy, Clone)]
 pub enum Placement {
@@ -211,7 +220,11 @@ async fn check_for_cup_winner(ctx: Context, database: Arc<Database>) {
                 }
                 Ok(Some(player)) => {
                     let nick = player.get_nick(guild_id, &ctx.http).await.unwrap();
-                    format!("@here Grattis {nick} till vinsten av wordlecupen, du är fan bäst.")
+                    CONGRATULATIONS
+                        .iter()
+                        .choose(&mut rand::thread_rng())
+                        .unwrap()
+                        .replace("{nick}", &nick)
                 }
             };
             channel_id.say(&ctx, message).await.unwrap();
