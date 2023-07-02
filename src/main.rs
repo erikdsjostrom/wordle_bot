@@ -7,9 +7,10 @@ mod player;
 mod scoresheet;
 mod utils;
 
-use std::{fmt::Display, sync::Arc, time::Duration};
+use std::{fmt::Display, sync::Arc};
 
 use bot::Bot;
+use chrono::Local;
 use database::Database;
 use dotenv::dotenv;
 use error::{Error, Result};
@@ -201,11 +202,25 @@ fn exit(err: Error) -> ! {
     std::process::exit(1);
 }
 
+// Actually 1 minute past midnight, just to be sure
+async fn wait_until_midnight() {
+    let now = Local::now();
+    #[allow(deprecated)]
+    let tomorrow = now
+        .date()
+        .and_hms_opt(0, 1, 0)
+        .unwrap()
+        .checked_add_days(chrono::Days::new(1))
+        .unwrap();
+    let duration = tomorrow.signed_duration_since(now);
+    debug!("Waiting until midnight.");
+    tokio::time::sleep(duration.to_std().unwrap()).await;
+    debug!("Midnight reached.");
+}
+
 // Checks if we have entered a new cup season, if so prints of the winner of the last cup.
 async fn check_for_cup_winner(ctx: Context, database: Arc<Database>) {
     debug!("Cup winner check loop spawned.");
-    // Run check every two hours
-    let mut interval = tokio::time::interval(Duration::from_secs(2 * 60 * 60));
     let mut current_cup = current_cup_number();
     let channel_id: ChannelId = CHANNEL_ID.into();
     let guild_id: GuildId = GUILD_ID.into();
@@ -231,8 +246,7 @@ async fn check_for_cup_winner(ctx: Context, database: Arc<Database>) {
             info!("Cup winner announced");
             current_cup = cup;
         }
-        debug!("No new cup winner for cup {current_cup}.");
-        interval.tick().await;
+        wait_until_midnight().await;
     }
 }
 
