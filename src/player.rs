@@ -1,4 +1,4 @@
-use crate::error::Result;
+use anyhow::Result;
 use serenity::{
     http::CacheHttp,
     model::prelude::{GuildId, UserId},

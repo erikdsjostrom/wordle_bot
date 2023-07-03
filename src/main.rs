@@ -1,7 +1,6 @@
 mod bot;
 mod command;
 mod database;
-mod error;
 mod parser;
 mod player;
 mod scoresheet;
@@ -9,15 +8,16 @@ mod utils;
 
 use std::{fmt::Display, sync::Arc};
 
+use anyhow::{Context, Result};
 use bot::Bot;
 use chrono::Local;
 use database::Database;
 use dotenv::dotenv;
-use error::{Error, Result};
 use log::{debug, error, info};
 use rand::seq::IteratorRandom;
 use serenity::{
     async_trait,
+    client::Context as SerenityContext,
     model::{
         application::interaction::{Interaction, InteractionResponseType},
         prelude::{command::Command, *},
@@ -66,7 +66,7 @@ impl Display for Placement {
 async fn update_channel_title(
     channel: &mut GuildChannel,
     database: &Database,
-    ctx: &Context,
+    ctx: &SerenityContext,
 ) -> Result<()> {
     let dagens_ledare = match database.get_gold_medalist(None).await? {
         Some(players) => {
@@ -91,7 +91,7 @@ async fn update_channel_title(
 
 #[async_trait]
 impl EventHandler for Bot {
-    async fn ready(&self, ctx: Context, ready: Ready) {
+    async fn ready(&self, ctx: SerenityContext, ready: Ready) {
         debug!("{} is connected!", ready.user.name);
 
         let _guild_id = GuildId(
@@ -124,15 +124,17 @@ impl EventHandler for Bot {
 
         let database = Arc::clone(&self.database);
         tokio::spawn(async move {
-            check_for_cup_winner(ctx.clone(), Arc::clone(&database)).await;
+            if let Err(e) = check_for_cup_winner(ctx.clone(), Arc::clone(&database)).await {
+                error!("Cup winner check loop errored: {e}");
+            };
         });
     }
 
-    async fn cache_ready(&self, _ctx: Context, _guilds: Vec<GuildId>) {
+    async fn cache_ready(&self, _ctx: SerenityContext, _guilds: Vec<GuildId>) {
         debug!("Cache ready.");
     }
 
-    async fn interaction_create(&self, ctx: Context, interaction: Interaction) {
+    async fn interaction_create(&self, ctx: SerenityContext, interaction: Interaction) {
         if let Interaction::ApplicationCommand(command) = interaction {
             debug!("Received command interaction: {:#?}", command);
 
@@ -149,13 +151,9 @@ impl EventHandler for Bot {
                     )
                     .await
                 }
-                _ => Err(Error::UnknownCommand),
-            };
-
-            let content = match content {
-                Ok(c) => c,
-                Err(e) => exit(e),
-            };
+                c => panic!("Unknown command recieved: {c}"),
+            }
+            .unwrap();
 
             if let Err(why) = command
                 .create_interaction_response(&ctx.http, |response| {
@@ -170,11 +168,9 @@ impl EventHandler for Bot {
         }
     }
 
-    async fn message(&self, ctx: Context, msg: Message) {
+    async fn message(&self, ctx: SerenityContext, msg: Message) {
         if msg.content.starts_with("Wordle") {
-            if let Err(err) = self.handle_wordle_message(&msg, &ctx).await {
-                exit(err);
-            }
+            self.handle_wordle_message(&msg, &ctx).await.unwrap();
             if let Ok(channel) = msg.channel(&ctx).await {
                 if let Some(mut guild_channel) = channel.guild() {
                     match update_channel_title(&mut guild_channel, &self.database, &ctx).await {
@@ -197,29 +193,28 @@ impl EventHandler for Bot {
     }
 }
 
-fn exit(err: Error) -> ! {
-    error!("{err}");
-    std::process::exit(1);
-}
-
 // Actually 1 minute past midnight, just to be sure
-async fn wait_until_midnight() {
+async fn wait_until_midnight() -> Result<()> {
     let now = Local::now();
     #[allow(deprecated)]
     let tomorrow = now
         .date()
         .and_hms_opt(0, 1, 0)
-        .unwrap()
+        .context("Could not set hms")?
         .checked_add_days(chrono::Days::new(1))
-        .unwrap();
+        .context("Could not add a day")?;
     let duration = tomorrow.signed_duration_since(now);
     debug!("Waiting until midnight.");
-    tokio::time::sleep(duration.to_std().unwrap()).await;
+    tokio::time::sleep(duration.to_std()?).await;
     debug!("Midnight reached.");
+    Ok(())
 }
 
 // Checks if we have entered a new cup season, if so prints of the winner of the last cup.
-async fn check_for_cup_winner(ctx: Context, database: Arc<Database>) {
+async fn check_for_cup_winner(
+    ctx: serenity::client::Context,
+    database: Arc<Database>,
+) -> Result<()> {
     debug!("Cup winner check loop spawned.");
     let mut current_cup = current_cup_number();
     let channel_id: ChannelId = CHANNEL_ID.into();
@@ -227,14 +222,13 @@ async fn check_for_cup_winner(ctx: Context, database: Arc<Database>) {
     loop {
         let cup = current_cup_number();
         if current_cup != cup {
-            let message: String = match database.cup_leader(&current_cup).await {
-                Err(err) => exit(err),
-                Ok(None) => {
+            let message: String = match database.cup_leader(&current_cup).await? {
+                None => {
                     error!("No leader in the current cup.");
                     String::from("Ingen vinnare i denna cup.")
                 }
-                Ok(Some(player)) => {
-                    let nick = player.get_nick(guild_id, &ctx.http).await.unwrap();
+                Some(player) => {
+                    let nick = player.get_nick(guild_id, &ctx.http).await?;
                     CONGRATULATIONS
                         .iter()
                         .choose(&mut rand::thread_rng())
@@ -242,28 +236,22 @@ async fn check_for_cup_winner(ctx: Context, database: Arc<Database>) {
                         .replace("{nick}", &nick)
                 }
             };
-            channel_id.say(&ctx, message).await.unwrap();
+            channel_id.say(&ctx, message).await?;
             info!("Cup winner announced");
             current_cup = cup;
         }
-        wait_until_midnight().await;
+        wait_until_midnight().await?
     }
 }
 
 #[tokio::main]
-async fn main() {
+async fn main() -> Result<()> {
     env_logger::init();
     dotenv().ok();
     // Configure the client with your Discord bot token in the environment.
     let token = std::env::var("DISCORD_TOKEN").expect("Expected a token in the environment");
 
-    let database = match Database::new("database.sqlite").await {
-        Ok(db) => db,
-        Err(err) => {
-            error!("{err}");
-            std::process::exit(1);
-        }
-    };
+    let database = Database::new("database.sqlite").await?;
 
     let bot = Bot {
         database: Arc::new(database),
@@ -272,12 +260,6 @@ async fn main() {
     let intents = GatewayIntents::GUILD_MESSAGES
         | GatewayIntents::DIRECT_MESSAGES
         | GatewayIntents::MESSAGE_CONTENT;
-    let mut client = Client::builder(&token, intents)
-        .event_handler(bot)
-        .await
-        .expect("Err creating client");
-    match client.start().await {
-        Ok(_) => (),
-        Err(e) => eprintln!("{e}"),
-    }
+    let mut client = Client::builder(&token, intents).event_handler(bot).await?;
+    anyhow::Ok(client.start().await?)
 }

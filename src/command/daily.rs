@@ -1,14 +1,12 @@
+use anyhow::Result;
 use serenity::{
     builder::CreateApplicationCommand,
     model::prelude::interaction::application_command::CommandDataOption, prelude::Context,
     utils::MessageBuilder,
 };
 
-use crate::{
-    database::Database, error::Result, scoresheet::Scoresheet, Placement, GUILD_ID,
-};
-
 use super::score::FIB;
+use crate::{database::Database, scoresheet::Scoresheet, Placement, GUILD_ID};
 
 pub(crate) async fn run(
     database: &Database,

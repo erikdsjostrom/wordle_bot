@@ -1,13 +1,14 @@
-use std::collections::HashMap;
-use std::future::Future;
+use std::{collections::HashMap, future::Future};
 
+use anyhow::Result;
 use log::debug;
 
-use crate::command::score::FIB;
-use crate::error::Result;
-use crate::player::Player;
-use crate::scoresheet::Scoresheet;
-use crate::utils::{self, current_cup_number};
+use crate::{
+    command::score::FIB,
+    player::Player,
+    scoresheet::Scoresheet,
+    utils::{self, current_cup_number},
+};
 
 pub(crate) struct Database {
     database: sqlx::SqlitePool,

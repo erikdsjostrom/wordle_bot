@@ -1,11 +1,12 @@
 use std::collections::HashMap;
 
-use serenity::builder::CreateApplicationCommand;
-use serenity::model::prelude::interaction::application_command::CommandDataOption;
-use serenity::utils::MessageBuilder;
+use anyhow::Result;
+use serenity::{
+    builder::CreateApplicationCommand,
+    model::prelude::interaction::application_command::CommandDataOption, utils::MessageBuilder,
+};
 
-use crate::player::Player;
-use crate::{database::Database, error::Result, Placement};
+use crate::{database::Database, player::Player, Placement};
 
 // Collects, calculates and presents various statistics
 // for a given player.

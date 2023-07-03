@@ -1,13 +1,19 @@
-use log::{debug, error, info};
-use serenity::futures::StreamExt;
-use serenity::model::prelude::{ChannelId, Message, ReactionType};
-use serenity::prelude::Context;
-
-use crate::database::Database;
-use crate::error::Result;
-use crate::utils::{cup_number_from_unixtime, recalcualate_high_scores};
-use crate::{parser, Placement};
 use std::sync::Arc;
+
+use anyhow::Result;
+use log::{debug, error, info};
+use serenity::{
+    futures::StreamExt,
+    model::prelude::{ChannelId, Message, ReactionType},
+    prelude::Context,
+};
+
+use crate::{
+    database::Database,
+    parser,
+    utils::{cup_number_from_unixtime, recalcualate_high_scores},
+    Placement,
+};
 
 pub(crate) struct Bot {
     pub database: Arc<Database>,

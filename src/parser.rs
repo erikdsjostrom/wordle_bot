@@ -1,7 +1,10 @@
-use crate::error::{Error, Result};
-use nom::sequence::{preceded, separated_pair};
-use nom::{bytes::complete::tag, IResult};
-use nom::{character, combinator};
+use anyhow::{anyhow, Result};
+use nom::{
+    bytes::complete::tag,
+    character, combinator,
+    sequence::{preceded, separated_pair},
+    IResult,
+};
 
 // Assert that line starts with Wordle, but drop the parsed value
 fn parse_wordle_str(s: &str) -> IResult<&str, ()> {
@@ -25,7 +28,7 @@ fn parse_score(s: &str) -> IResult<&str, i64> {
             '5' => 5,
             '6' => 6,
             _ => unreachable!(),
-        }
+        },
     )(s)
 }
 
@@ -39,9 +42,10 @@ fn parse_wordle(s: &str) -> IResult<&str, (i64, i64)> {
 
 /// Parses a wordle msg "Wordle day score/6" into (day, score)
 pub(crate) fn parse_msg(s: &str) -> Result<(i64, i64)> {
-    parse_wordle(s)
-        .map(|(_, res)| res)
-        .map_err(|err| Error::Message(format!("Parse error: {err}")))
+    match parse_wordle(s).map(|(_, res)| res) {
+        Ok(n) => Ok(n),
+        Err(e) => Err(anyhow!(e.to_string())),
+    }
 }
 
 #[cfg(test)]
