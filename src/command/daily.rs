@@ -1,15 +1,17 @@
+use std::sync::Arc;
+
 use anyhow::Result;
 use serenity::{
     builder::CreateApplicationCommand,
-    model::prelude::interaction::application_command::CommandDataOption, prelude::Context,
+    model::prelude::interaction::application_command::CommandDataOption, prelude::{Context, RwLock},
     utils::MessageBuilder,
 };
 
 use super::score::FIB;
-use crate::{database::Database, scoresheet::Scoresheet, Placement, GUILD_ID};
+use crate::{database::CachedDatabase as Database, scoresheet::Scoresheet, Placement, GUILD_ID};
 
 pub(crate) async fn run(
-    database: &Database,
+    database: &Arc<RwLock<Database>>,
     ctx: &Context,
     _options: &[CommandDataOption],
 ) -> Result<String> {
@@ -45,8 +47,9 @@ pub fn register(command: &mut CreateApplicationCommand) -> &mut CreateApplicatio
 }
 
 async fn fetch_daily_result(
-    database: &Database,
+    database: &Arc<RwLock<Database>>,
 ) -> Result<[(Placement, Option<Vec<Scoresheet>>); 3]> {
+    let database = database.read().await;
     Ok([
         (Placement::Gold, database.get_gold_medalist(None).await?),
         (Placement::Silver, database.get_silver_medalist(None).await?),

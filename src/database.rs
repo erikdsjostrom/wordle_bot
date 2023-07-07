@@ -1,4 +1,8 @@
-use std::{collections::HashMap, future::Future};
+use std::{
+    collections::HashMap,
+    future::Future,
+    ops::Deref,
+};
 
 use anyhow::Result;
 use log::debug;
@@ -9,6 +13,50 @@ use crate::{
     scoresheet::Scoresheet,
     utils::{self, current_cup_number},
 };
+
+pub(crate) struct CachedDatabase {
+    database: Database,
+    // Cache
+    current_cup_score: Vec<(Player, u32)>,
+    total_cup_score: Vec<(Player, u32)>,
+}
+
+impl Deref for CachedDatabase {
+    type Target = Database;
+
+    fn deref(&self) -> &Self::Target {
+        &self.database
+    }
+}
+
+
+impl CachedDatabase {
+    pub(crate) async fn new(filename: &str) -> Result<Self> {
+        let database = Database::new(filename).await?;
+        let current_cup_score = database.current_cup_score().await?;
+        let total_cup_score = database.total().await?;
+        Ok(Self {
+            database,
+            current_cup_score,
+            total_cup_score,
+        })
+    }
+
+    pub(crate) async fn update_cache(&mut self) -> Result<()> {
+        debug!("Updating cache");
+        self.total_cup_score = self.database.total().await?;
+        self.current_cup_score = self.database.current_cup_score().await?;
+        Ok(())
+    }
+
+    pub(crate) fn current_cup_score(&self) -> &[(Player, u32)] {
+        self.current_cup_score.as_ref()
+    }
+
+    pub(crate) fn total_cup_score(&self) -> &Vec<(Player, u32)> {
+        &self.total_cup_score
+    }
+}
 
 pub(crate) struct Database {
     database: sqlx::SqlitePool,
@@ -247,7 +295,7 @@ impl Database {
         Ok(leader_board)
     }
 
-    pub(crate) async fn total(&self) -> Result<HashMap<Player, u32>> {
+    async fn total(&self) -> Result<Vec<(Player, u32)>> {
         let rows = sqlx::query!("SELECT player_id, score FROM score_sheet ORDER BY player_id")
             .fetch_all(&self.database)
             .await?;
@@ -261,10 +309,11 @@ impl Database {
                 .and_modify(|total_score| *total_score += FIB[score as usize])
                 .or_insert(FIB[score as usize]);
         }
+        let result: Vec<(Player, u32)> = result.iter().map(|(k, v)| (*k, *v)).collect();
         Ok(result)
     }
 
-    pub async fn current_cup_score(&self) -> Result<Vec<(Player, u32)>> {
+    async fn current_cup_score(&self) -> Result<Vec<(Player, u32)>> {
         let score_getter =
             |player_id| async move { self.get_player_scores_for_current_cup(player_id).await };
         self.calculate_leader_board(score_getter).await

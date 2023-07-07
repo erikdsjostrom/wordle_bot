@@ -11,7 +11,7 @@ use std::{fmt::Display, sync::Arc};
 use anyhow::{Context, Result};
 use bot::Bot;
 use chrono::Local;
-use database::Database;
+use database::CachedDatabase as Database;
 use dotenv::dotenv;
 use log::{debug, error, info};
 use rand::seq::IteratorRandom;
@@ -62,13 +62,12 @@ impl Display for Placement {
     }
 }
 
-// XXX
 async fn update_channel_title(
     channel: &mut GuildChannel,
-    database: &Database,
+    database: &Arc<RwLock<Database>>,
     ctx: &SerenityContext,
 ) -> Result<()> {
-    let dagens_ledare = match database.get_gold_medalist(None).await? {
+    let dagens_ledare = match database.read().await.get_gold_medalist(None).await? {
         Some(players) => {
             let mut leaders: Vec<String> = Vec::default();
             for player in players {
@@ -76,11 +75,11 @@ async fn update_channel_title(
             }
             leaders.join(", ")
         }
-        None => "Tomten".to_string(),
+        None => String::new(),
     };
-    let cup_ledare = match database.current_cup_leader().await? {
+    let cup_ledare = match database.read().await.current_cup_leader().await? {
         Some(player) => player.get_nick(channel.guild_id, ctx).await?,
-        None => "Tomten".to_string(),
+        None => String::new(),
     };
     let title = format!("Dagens ledare: {dagens_ledare}\tCupledare: {cup_ledare}");
     channel
@@ -122,9 +121,9 @@ impl EventHandler for Bot {
             commands
         );
 
-        let database = Arc::clone(&self.database);
+        let database = self.database.clone();
         tokio::spawn(async move {
-            if let Err(e) = check_for_cup_winner(ctx.clone(), Arc::clone(&database)).await {
+            if let Err(e) = check_for_cup_winner(ctx.clone(), database).await {
                 error!("Cup winner check loop errored: {e}");
             };
         });
@@ -170,12 +169,15 @@ impl EventHandler for Bot {
 
     async fn message(&self, ctx: SerenityContext, msg: Message) {
         if msg.content.starts_with("Wordle") {
-            self.handle_wordle_message(&msg, &ctx).await.unwrap();
+            if let Err(e) = self.handle_wordle_message(&msg, &ctx).await {
+                error!("{e}");
+            }
             if let Ok(channel) = msg.channel(&ctx).await {
                 if let Some(mut guild_channel) = channel.guild() {
-                    match update_channel_title(&mut guild_channel, &self.database, &ctx).await {
-                        Ok(_) => (),
-                        Err(e) => error!("{e}"),
+                    if let Err(e) =
+                        update_channel_title(&mut guild_channel, &self.database, &ctx).await
+                    {
+                        error!("{e}")
                     };
                 }
             }
@@ -213,7 +215,7 @@ async fn wait_until_midnight() -> Result<()> {
 // Checks if we have entered a new cup season, if so prints of the winner of the last cup.
 async fn check_for_cup_winner(
     ctx: serenity::client::Context,
-    database: Arc<Database>,
+    database: Arc<RwLock<Database>>,
 ) -> Result<()> {
     debug!("Cup winner check loop spawned.");
     let mut current_cup = current_cup_number();
@@ -222,7 +224,7 @@ async fn check_for_cup_winner(
     loop {
         let cup = current_cup_number();
         if current_cup != cup {
-            let message: String = match database.cup_leader(&current_cup).await? {
+            let message: String = match database.read().await.cup_leader(&current_cup).await? {
                 None => {
                     error!("No leader in the current cup.");
                     String::from("Ingen vinnare i denna cup.")
@@ -251,11 +253,9 @@ async fn main() -> Result<()> {
     // Configure the client with your Discord bot token in the environment.
     let token = std::env::var("DISCORD_TOKEN").expect("Expected a token in the environment");
 
-    let database = Database::new("database.sqlite").await?;
+    let database = Arc::new(RwLock::new(Database::new("database.sqlite").await?));
 
-    let bot = Bot {
-        database: Arc::new(database),
-    };
+    let bot = Bot { database };
 
     let intents = GatewayIntents::GUILD_MESSAGES
         | GatewayIntents::DIRECT_MESSAGES

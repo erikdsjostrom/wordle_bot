@@ -1,20 +1,21 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, sync::Arc};
 
 use anyhow::Result;
 use serenity::{
     builder::CreateApplicationCommand,
-    model::prelude::interaction::application_command::CommandDataOption, utils::MessageBuilder,
+    model::prelude::interaction::application_command::CommandDataOption, utils::MessageBuilder, prelude::RwLock,
 };
 
-use crate::{database::Database, player::Player, Placement};
+use crate::{database::CachedDatabase as Database, player::Player, Placement};
 
 // Collects, calculates and presents various statistics
 // for a given player.
 pub(crate) async fn run(
     player: &Player,
-    database: &Database,
+    database: &Arc<RwLock<Database>>,
     _options: &[CommandDataOption],
 ) -> Result<String> {
+    let database = database.read().await;
     let mut response = MessageBuilder::new();
     let gold_medals = database.get_user_gold_medals(player.id as i64).await?;
     let silver_medals = database.get_user_silver_medals(player.id as i64).await?;

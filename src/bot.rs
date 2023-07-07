@@ -5,18 +5,18 @@ use log::{debug, error, info};
 use serenity::{
     futures::StreamExt,
     model::prelude::{ChannelId, Message, ReactionType},
-    prelude::Context,
+    prelude::{Context, RwLock},
 };
 
 use crate::{
-    database::Database,
+    database::CachedDatabase as Database,
     parser,
     utils::{cup_number_from_unixtime, recalcualate_high_scores},
     Placement,
 };
 
 pub(crate) struct Bot {
-    pub database: Arc<Database>,
+    pub database: Arc<RwLock<Database>>,
 }
 
 impl Bot {
@@ -27,18 +27,19 @@ impl Bot {
         http: &Context,
     ) -> Result<()> {
         // playerId, msgId, score
+        let database = self.database.read().await;
         for (p, medalists) in [
             (
                 Placement::Gold,
-                self.database.get_gold_medalist(Some(day)).await?,
+                database.get_gold_medalist(Some(day)).await?,
             ),
             (
                 Placement::Silver,
-                self.database.get_silver_medalist(Some(day)).await?,
+                database.get_silver_medalist(Some(day)).await?,
             ),
             (
                 Placement::Bronze,
-                self.database.get_bronze_medalist(Some(day)).await?,
+                database.get_bronze_medalist(Some(day)).await?,
             ),
         ] {
             let Some(medalists) = medalists else {continue;};
@@ -56,18 +57,19 @@ impl Bot {
     }
 
     async fn clear_medals(&self, day: i64, channel_id: ChannelId, http: &Context) -> Result<()> {
+        let database = self.database.read().await;
         for (p, medalists) in [
             (
                 Placement::Gold,
-                self.database.get_gold_medalist(Some(day)).await?,
+                database.get_gold_medalist(Some(day)).await?,
             ),
             (
                 Placement::Silver,
-                self.database.get_silver_medalist(Some(day)).await?,
+                database.get_silver_medalist(Some(day)).await?,
             ),
             (
                 Placement::Bronze,
-                self.database.get_bronze_medalist(Some(day)).await?,
+                database.get_bronze_medalist(Some(day)).await?,
             ),
         ] {
             let Some(medalists) = medalists else {continue;};
@@ -89,13 +91,14 @@ impl Bot {
         let player_id = msg.author.id.0 as i64;
         let msg_id = msg.id.0 as i64;
         let (day, score) = parser::parse_msg(&msg.content)?;
+        let database = self.database.write().await;
         // Create new player if not exists
-        self.database.new_player(player_id).await?;
+        database.new_player(player_id).await?;
         // TODO: Is there a better place to do this to avoid runtime error if this is not executed first?
-        self.database.new_daily(day).await?;
+        database.new_daily(day).await?;
         debug!("Day: {}, Score: {}, Cup number: {}", day, score, cup_number);
         self.new_daily_score(Some(day), score).await?;
-        self.database
+        database
             .new_score_sheet(msg_id, day, player_id, score, cup_number)
             .await?;
         Ok(())
@@ -125,19 +128,25 @@ impl Bot {
         if score == 0 {
             return Ok(());
         }
-        let day = day.unwrap_or(self.database.get_daily_day().await?);
-        let high_scores = self.database.get_daily_high_scores(day).await?;
+        let database = self.database.write().await;
+        let day = day.unwrap_or(database.get_daily_day().await?);
+        let high_scores = database.get_daily_high_scores(day).await?;
         let high_scores = recalcualate_high_scores(high_scores, score);
-        self.database
+        database
             .update_daily(day, high_scores[0], high_scores[1], high_scores[2])
             .await
     }
 
-    pub(crate) async fn handle_wordle_message(&self, msg: &Message, ctx: &Context) -> Result<()> {
+    pub(crate) async fn handle_wordle_message(
+        &self,
+        msg: &Message,
+        ctx: &Context,
+    ) -> Result<()> {
         let (day, _) = parser::parse_msg(&msg.content)?;
         self.clear_medals(day, msg.channel_id, ctx).await?;
         self.new_score_sheet(msg).await?;
         self.set_medals(day, msg.channel_id, ctx).await?;
+        self.database.write().await.update_cache().await?;
         Ok(())
     }
 }

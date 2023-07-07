@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use anyhow::Result;
 use log::debug;
 use serenity::{
@@ -10,13 +12,15 @@ use serenity::{
     utils::MessageBuilder,
 };
 
-use crate::{database::Database, utils::current_cup_number_cute_format, GUILD_ID};
+use crate::{
+    database::CachedDatabase as Database, utils::current_cup_number_cute_format, GUILD_ID,
+};
 
 // Failure (X) gives a score of zero
 pub const FIB: [u32; 7] = [0, 13, 8, 5, 3, 2, 1];
 
 pub(crate) async fn run(
-    database: &Database,
+    database: &Arc<RwLock<Database>>,
     ctx: &Context,
     options: &[CommandDataOption],
 ) -> Result<String> {
@@ -35,18 +39,14 @@ pub(crate) async fn run(
     };
     debug!("Totala: {totala}");
     let mut response = MessageBuilder::new();
+    let database = database.read().await;
     let score = if totala {
         response.push_bold_line("Ställning i totalcupen:");
-        database
-            .total()
-            .await?
-            .iter()
-            .map(|(k, v)| (*k, *v))
-            .collect()
+        database.total_cup_score()
     } else {
         let cup_number = current_cup_number_cute_format();
         response.push_bold_line(format!("Ställning i månadscupen {cup_number}:"));
-        database.current_cup_score().await?
+        database.current_cup_score()
     };
     debug!("Writing results.");
     for (player, result) in score {
